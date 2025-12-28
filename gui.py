@@ -13,7 +13,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QTextEdit, QLabel,
                              QFileDialog, QMessageBox, QGroupBox, QProgressBar,
-                             QSplitter, QTabWidget)
+                             QSplitter, QTabWidget, QRadioButton, QButtonGroup)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QTextCursor
 
@@ -34,10 +34,12 @@ class CalibrationWorker(QThread):
     finished_signal = pyqtSignal(dict)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, config_path, mode='simple'):
+    def __init__(self, config_path, mode='simple', data_source_mode='offline', pcd_file=None):
         super().__init__()
         self.config_path = config_path
         self.mode = mode
+        self.data_source_mode = data_source_mode  # 'offline' 或 'realtime'
+        self.pcd_file = pcd_file  # 离线模式的点云文件路径
         self.current_step = 0
 
     def log(self, message):
@@ -47,6 +49,56 @@ class CalibrationWorker(QThread):
     def update_progress(self, percent, message):
         """更新进度"""
         self.progress_signal.emit(percent, message)
+
+    def get_pointcloud(self, config):
+        """获取点云数据（离线或实时）"""
+        if self.data_source_mode == 'offline':
+            # 离线模式：从文件加载
+            pcd_file = self.pcd_file if self.pcd_file else config['data_source']['offline']['input_file']
+            if not os.path.exists(pcd_file):
+                raise FileNotFoundError(f"点云文件不存在: {pcd_file}")
+
+            self.log(f"从文件加载点云: {pcd_file}")
+            pcd = o3d.io.read_point_cloud(pcd_file)
+            self.log(f"点云加载成功: {len(pcd.points):,} 点")
+            return pcd
+
+        elif self.data_source_mode == 'realtime':
+            # 实时模式：从相机采集
+            self.log("正在从相机采集点云...")
+            try:
+                from camera_capture import CameraCapture
+
+                camera_config = config['data_source']['realtime']
+                camera = CameraCapture(camera_config)
+
+                pcd = camera.capture_pointcloud()
+
+                if pcd is None:
+                    raise RuntimeError("点云采集失败")
+
+                self.log(f"点云采集成功: {len(pcd.points):,} 点")
+
+                # 保存原始点云
+                if config['output'].get('save_raw_pointcloud', True):
+                    output_dir = config['output']['dir']
+                    os.makedirs(output_dir, exist_ok=True)
+
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    raw_pcd_file = os.path.join(output_dir, f"raw_pointcloud_{timestamp}.ply")
+                    o3d.io.write_point_cloud(raw_pcd_file, pcd)
+                    self.log(f"原始点云已保存: {raw_pcd_file}")
+
+                return pcd
+
+            except ImportError as e:
+                raise ImportError(f"无法导入相机采集模块: {e}\n请确保已正确安装相机驱动和camera_capture.py模块")
+            except Exception as e:
+                raise RuntimeError(f"点云采集失败: {e}")
+
+        else:
+            raise ValueError(f"未知的数据源模式: {self.data_source_mode}")
 
     def run(self):
         """执行标定流程"""
@@ -60,15 +112,11 @@ class CalibrationWorker(QThread):
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
             self.log(f"配置文件加载成功: {self.config_path}")
+            self.log(f"数据源模式: {self.data_source_mode}")
 
-            # 加载点云
-            self.update_progress(10, "加载点云数据...")
-            pcd_file = config['point_cloud']['input_file']
-            if not os.path.exists(pcd_file):
-                raise FileNotFoundError(f"点云文件不存在: {pcd_file}")
-
-            pcd_original = o3d.io.read_point_cloud(pcd_file)
-            self.log(f"点云加载成功: {len(pcd_original.points):,} 点")
+            # 获取点云（离线或实时）
+            self.update_progress(10, "获取点云数据...")
+            pcd_original = self.get_pointcloud(config)
 
             # 预处理
             self.update_progress(20, "点云预处理...")
@@ -248,6 +296,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config_path = "config.yaml"
         self.worker = None
+        self.pcd_file = None  # 离线模式的点云文件
         self.init_ui()
 
     def init_ui(self):
@@ -281,6 +330,45 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.config_btn)
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
+
+        # 数据源选择区域
+        data_source_group = QGroupBox("数据源选择")
+        data_source_layout = QVBoxLayout()
+
+        # 单选按钮组
+        self.data_source_btn_group = QButtonGroup()
+
+        # 离线模式
+        offline_layout = QHBoxLayout()
+        self.offline_radio = QRadioButton("离线模式（从文件加载）")
+        self.offline_radio.setChecked(True)  # 默认选中
+        self.offline_radio.toggled.connect(self.on_data_source_changed)
+        self.data_source_btn_group.addButton(self.offline_radio)
+        offline_layout.addWidget(self.offline_radio)
+
+        self.select_file_btn = QPushButton("选择点云文件")
+        self.select_file_btn.clicked.connect(self.select_pointcloud_file)
+        offline_layout.addWidget(self.select_file_btn)
+
+        self.file_label = QLabel("未选择文件（将使用配置文件中的路径）")
+        offline_layout.addWidget(self.file_label)
+
+        data_source_layout.addLayout(offline_layout)
+
+        # 实时模式
+        realtime_layout = QHBoxLayout()
+        self.realtime_radio = QRadioButton("实时模式（从相机采集）")
+        self.realtime_radio.toggled.connect(self.on_data_source_changed)
+        self.data_source_btn_group.addButton(self.realtime_radio)
+        realtime_layout.addWidget(self.realtime_radio)
+
+        self.camera_info_label = QLabel("将使用配置文件中的相机参数")
+        realtime_layout.addWidget(self.camera_info_label)
+
+        data_source_layout.addLayout(realtime_layout)
+
+        data_source_group.setLayout(data_source_layout)
+        main_layout.addWidget(data_source_group)
 
         # 模式选择区域
         mode_group = QGroupBox("选择模式")
@@ -351,6 +439,29 @@ class MainWindow(QMainWindow):
             self.config_label.setText(f"当前配置: {self.config_path}")
             self.append_log(f"已选择配置文件: {self.config_path}")
 
+    def select_pointcloud_file(self):
+        """选择点云文件"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择点云文件", "", "点云文件 (*.ply *.pcd *.xyz)"
+        )
+        if file_path:
+            self.pcd_file = file_path
+            self.file_label.setText(f"已选择: {os.path.basename(file_path)}")
+            self.append_log(f"已选择点云文件: {self.pcd_file}")
+
+    def on_data_source_changed(self):
+        """数据源模式切换"""
+        if self.offline_radio.isChecked():
+            self.select_file_btn.setEnabled(True)
+            self.file_label.setEnabled(True)
+        else:
+            self.select_file_btn.setEnabled(False)
+            self.file_label.setEnabled(False)
+
+    def get_data_source_mode(self):
+        """获取当前选择的数据源模式"""
+        return 'offline' if self.offline_radio.isChecked() else 'realtime'
+
     def append_log(self, message):
         """添加日志"""
         self.log_text.append(message)
@@ -372,16 +483,31 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"配置文件不存在: {self.config_path}")
             return
 
+        # 获取数据源模式
+        data_source_mode = self.get_data_source_mode()
+
+        # 如果是离线模式且选择了文件，检查文件是否存在
+        if data_source_mode == 'offline' and self.pcd_file:
+            if not os.path.exists(self.pcd_file):
+                QMessageBox.critical(self, "错误", f"点云文件不存在: {self.pcd_file}")
+                return
+
         self.log_text.clear()
         self.result_text.clear()
-        self.append_log("启动简单模式...")
+        self.append_log(f"启动简单模式...")
+        self.append_log(f"数据源: {data_source_mode}")
 
         # 禁用按钮
         self.simple_btn.setEnabled(False)
         self.detail_btn.setEnabled(False)
 
         # 创建工作线程
-        self.worker = CalibrationWorker(self.config_path, mode='simple')
+        self.worker = CalibrationWorker(
+            self.config_path,
+            mode='simple',
+            data_source_mode=data_source_mode,
+            pcd_file=self.pcd_file
+        )
         self.worker.log_signal.connect(self.append_log)
         self.worker.progress_signal.connect(self.update_progress)
         self.worker.finished_signal.connect(self.on_calibration_finished)
@@ -454,17 +580,32 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"配置文件不存在: {self.config_path}")
             return
 
+        # 获取数据源模式
+        data_source_mode = self.get_data_source_mode()
+
+        # 如果是离线模式且选择了文件，检查文件是否存在
+        if data_source_mode == 'offline' and self.pcd_file:
+            if not os.path.exists(self.pcd_file):
+                QMessageBox.critical(self, "错误", f"点云文件不存在: {self.pcd_file}")
+                return
+
         # 创建详细模式窗口
-        self.detail_window = DetailModeWindow(self.config_path)
+        self.detail_window = DetailModeWindow(
+            self.config_path,
+            data_source_mode=data_source_mode,
+            pcd_file=self.pcd_file
+        )
         self.detail_window.show()
 
 
 class DetailModeWindow(QMainWindow):
     """详细模式窗口"""
 
-    def __init__(self, config_path):
+    def __init__(self, config_path, data_source_mode='offline', pcd_file=None):
         super().__init__()
         self.config_path = config_path
+        self.data_source_mode = data_source_mode
+        self.pcd_file = pcd_file
         self.config = None
         self.pcd_original = None
         self.pcd_filtered = None
@@ -612,19 +753,57 @@ class DetailModeWindow(QMainWindow):
             self.step_buttons[self.current_step].setEnabled(True)
 
     def step1_load_pointcloud(self):
-        """步骤1: 加载点云"""
+        """步骤1: 获取点云（离线或实时）"""
         try:
-            self.current_step_label.setText("当前步骤: 1. 加载点云")
+            self.current_step_label.setText("当前步骤: 1. 获取点云")
             self.append_log("\n" + "=" * 60)
-            self.append_log("步骤1: 加载点云数据")
+            self.append_log("步骤1: 获取点云数据")
             self.append_log("=" * 60)
+            self.append_log(f"数据源模式: {self.data_source_mode}")
 
-            pcd_file = self.config['point_cloud']['input_file']
-            if not os.path.exists(pcd_file):
-                raise FileNotFoundError(f"点云文件不存在: {pcd_file}")
+            if self.data_source_mode == 'offline':
+                # 离线模式：从文件加载
+                pcd_file = self.pcd_file if self.pcd_file else self.config['data_source']['offline']['input_file']
+                if not os.path.exists(pcd_file):
+                    raise FileNotFoundError(f"点云文件不存在: {pcd_file}")
 
-            self.pcd_original = o3d.io.read_point_cloud(pcd_file)
-            self.append_log(f"点云加载成功: {pcd_file}")
+                self.append_log(f"从文件加载点云: {pcd_file}")
+                self.pcd_original = o3d.io.read_point_cloud(pcd_file)
+                self.append_log(f"点云加载成功!")
+
+            elif self.data_source_mode == 'realtime':
+                # 实时模式：从相机采集
+                self.append_log("正在从相机采集点云...")
+                try:
+                    from camera_capture import CameraCapture
+
+                    camera_config = self.config['data_source']['realtime']
+                    camera = CameraCapture(camera_config)
+
+                    self.pcd_original = camera.capture_pointcloud()
+
+                    if self.pcd_original is None:
+                        raise RuntimeError("点云采集失败")
+
+                    self.append_log(f"点云采集成功!")
+
+                    # 保存原始点云
+                    if self.config['output'].get('save_raw_pointcloud', True):
+                        output_dir = self.config['output']['dir']
+                        os.makedirs(output_dir, exist_ok=True)
+
+                        from datetime import datetime
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        raw_pcd_file = os.path.join(output_dir, f"raw_pointcloud_{timestamp}.ply")
+                        o3d.io.write_point_cloud(raw_pcd_file, self.pcd_original)
+                        self.append_log(f"原始点云已保存: {raw_pcd_file}")
+
+                except ImportError as e:
+                    raise ImportError(f"无法导入相机采集模块: {e}\n请确保已正确安装相机驱动和camera_capture.py模块")
+                except Exception as e:
+                    raise RuntimeError(f"点云采集失败: {e}")
+
+            # 显示点云信息
             self.append_log(f"点云数量: {len(self.pcd_original.points):,}")
             self.append_log(f"是否有颜色: {self.pcd_original.has_colors()}")
             self.append_log(f"是否有法向量: {self.pcd_original.has_normals()}")
@@ -644,7 +823,10 @@ class DetailModeWindow(QMainWindow):
             self.enable_next_step()
 
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"加载点云失败: {str(e)}")
+            import traceback
+            error_msg = f"获取点云失败: {str(e)}\n{traceback.format_exc()}"
+            self.append_log(error_msg)
+            QMessageBox.critical(self, "错误", error_msg)
 
     def step2_downsample(self):
         """步骤2: 降采样"""
