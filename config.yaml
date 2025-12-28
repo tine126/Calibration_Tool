@@ -3,6 +3,7 @@
 # 点云数据源配置
 data_source:
   mode: "offline"  # 数据采集模式: "offline"=离线点云文件, "realtime"=实时相机采集
+  # mode: "realtime"  # 数据采集模式: "offline"=离线点云文件, "realtime"=实时相机采集
 
   # 离线模式配置
   offline:
@@ -33,7 +34,7 @@ data_source:
       enabled: true  # 是否启用质量检测
       min_points: 50000  # 最小点数要求
       coverage_check: true  # 是否检查覆盖范围
-      max_retries: 3  # 质量不达标时最大重试次数
+      max_retries: 1  # 质量不达标时最大重试次数
 
 # 输出配置
 output:
@@ -83,8 +84,3 @@ hoop_detection:
 visualization:
   enabled: false            # 是否启用可视化窗口（true=启用，false=禁用）
   point_size: 2.0          # 点云显示大小
-
-# 输出参数
-output:
-  config_file: "config.json"  # 输出的转换矩阵配置文件
-  save_intermediate: true     # 是否保存中间结果

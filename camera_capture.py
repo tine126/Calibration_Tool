@@ -132,7 +132,78 @@ class CameraCapture:
 
     def _initialize_orbbec(self):
         """初始化Orbbec相机"""
-        raise NotImplementedError("Orbbec相机支持尚未实现")
+        try:
+            from pyorbbecsdk import Pipeline, Config, OBSensorType, OBFormat, PointCloudFilter, OBError
+
+            # 创建pipeline
+            self.pipeline = Pipeline()
+
+            # 创建配置
+            config = Config()
+
+            # 配置深度流 - 使用默认配置
+            try:
+                depth_profile_list = self.pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
+                if depth_profile_list is None:
+                    raise RuntimeError("未找到深度传感器配置")
+
+                depth_profile = depth_profile_list.get_default_video_stream_profile()
+                config.enable_stream(depth_profile)
+                print(f"  深度流配置成功")
+            except Exception as e:
+                print(f"  错误: 配置深度流失败: {e}")
+                raise
+
+            # 配置彩色流 - 使用默认配置
+            try:
+                color_profile_list = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
+                if color_profile_list:
+                    color_profile = color_profile_list.get_default_video_stream_profile()
+                    config.enable_stream(color_profile)
+                    print(f"  彩色流配置成功")
+                    self.has_color_sensor = True
+                else:
+                    print(f"  警告: 无法获取彩色流配置，将仅使用深度数据")
+                    self.has_color_sensor = False
+            except OBError as e:
+                print(f"  警告: 彩色流配置失败: {e}")
+                self.has_color_sensor = False
+
+            # 创建点云滤波器
+            self.point_cloud_filter = PointCloudFilter()
+
+            # 启动pipeline
+            self.pipeline.start(config)
+            print(f"  Orbbec相机已启动")
+
+            # 获取相机内参（可选，点云滤波器会自动使用）
+            try:
+                camera_param = self.pipeline.get_camera_param()
+                self.camera_intrinsics = camera_param
+                print(f"  已获取相机内参")
+            except Exception as e:
+                print(f"  警告: 无法获取相机内参 (点云滤波器将使用默认参数): {e}")
+                self.camera_intrinsics = None
+
+            # 等待相机稳定
+            print("  等待相机稳定...")
+            stable_count = 0
+            for i in range(30):
+                try:
+                    frames = self.pipeline.wait_for_frames(1000)
+                    if frames is not None:
+                        stable_count += 1
+                except Exception as e:
+                    if i == 0:
+                        print(f"  等待帧时出现警告: {e}")
+                    continue
+
+            print(f"  相机稳定完成 (成功接收 {stable_count}/30 帧)")
+
+        except ImportError:
+            raise ImportError("未安装pyorbbecsdk库。请运行: pip install pyorbbecsdk")
+        except Exception as e:
+            raise RuntimeError(f"Orbbec相机初始化失败: {e}")
 
     def capture_single_frame(self) -> Optional[o3d.geometry.PointCloud]:
         """
@@ -145,6 +216,8 @@ class CameraCapture:
             return self._capture_realsense_frame()
         elif self.camera_type == 'kinect':
             return self._capture_kinect_frame()
+        elif self.camera_type == 'orbbec':
+            return self._capture_orbbec_frame()
         else:
             return None
 
@@ -238,6 +311,89 @@ class CameraCapture:
             print(f"警告: 采集Kinect帧失败: {e}")
             return None
 
+    def _capture_orbbec_frame(self) -> Optional[o3d.geometry.PointCloud]:
+        """采集Orbbec单帧点云"""
+        try:
+            from pyorbbecsdk import OBFormat
+
+            # 等待帧（位置参数，单位：毫秒）
+            frames = self.pipeline.wait_for_frames(1000)
+
+            if frames is None:
+                print(f"  警告: wait_for_frames返回None")
+                return None
+
+            # 获取深度帧
+            depth_frame = frames.get_depth_frame()
+            if depth_frame is None:
+                print(f"  警告: 深度帧为None")
+                return None
+
+            # 获取彩色帧（如果可用）
+            color_frame = frames.get_color_frame() if self.has_color_sensor else None
+
+            # 使用PointCloudFilter生成点云
+            # 根据是否有彩色帧选择点云格式
+            point_format = OBFormat.RGB_POINT if color_frame is not None else OBFormat.POINT
+            self.point_cloud_filter.set_create_point_format(point_format)
+
+            # 处理帧生成点云
+            point_cloud_frame = self.point_cloud_filter.process(frames)
+
+            # 计算点云数据
+            points = self.point_cloud_filter.calculate(point_cloud_frame)
+
+            if len(points) == 0:
+                print(f"  警告: 生成的点云为空")
+                return None
+
+            # 提取点坐标（将毫米转换为米）
+            points_array = np.asarray(points)
+
+            # 根据点云格式提取数据
+            if point_format == OBFormat.RGB_POINT:
+                # RGB_POINT格式: [x, y, z, r, g, b]
+                positions = points_array[:, :3] * 0.001  # mm to m
+                colors = points_array[:, 3:6] / 255.0     # 归一化到[0,1]
+            else:
+                # POINT格式: [x, y, z]
+                positions = points_array.reshape(-1, 3) * 0.001  # mm to m
+                colors = None
+
+            # 过滤无效点：移除距离原点过近的点（< 0.1m，即100mm）
+            # 这些通常是无效的深度数据
+            distances = np.linalg.norm(positions, axis=1)
+            valid_mask = distances > 0.1  # 大于10cm
+
+            if np.sum(valid_mask) == 0:
+                print(f"  警告: 过滤后没有有效点")
+                return None
+
+            positions = positions[valid_mask]
+            if colors is not None:
+                colors = colors[valid_mask]
+
+            # 创建Open3D点云对象
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(positions)
+            if colors is not None:
+                pcd.colors = o3d.utility.Vector3dVector(colors)
+
+            # 检查点云空间范围
+            if len(positions) > 0:
+                bbox = positions.max(axis=0) - positions.min(axis=0)
+                print(f"  成功生成点云: {len(pcd.points):,} 点, 范围: X={bbox[0]:.2f}m Y={bbox[1]:.2f}m Z={bbox[2]:.2f}m")
+            else:
+                print(f"  成功生成点云: {len(pcd.points):,} 点")
+
+            return pcd
+
+        except Exception as e:
+            print(f"警告: 采集Orbbec帧失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def capture_multi_frames(self, num_frames: int) -> List[o3d.geometry.PointCloud]:
         """
         采集多帧点云
@@ -253,6 +409,14 @@ class CameraCapture:
         point_clouds = []
         success_count = 0
 
+        # 先清空缓冲区，丢弃旧帧
+        print("  清空帧缓冲区...")
+        for _ in range(5):
+            try:
+                self.pipeline.wait_for_frames(100)
+            except:
+                pass
+
         for i in range(num_frames):
             pcd = self.capture_single_frame()
 
@@ -263,8 +427,8 @@ class CameraCapture:
             else:
                 print(f"  警告: 第 {i+1} 帧采集失败，跳过")
 
-            # 短暂延迟，避免帧间相关性过高
-            time.sleep(0.033)  # ~30fps
+            # 增加延迟，确保相机有足够时间准备下一帧
+            time.sleep(0.1)  # 100ms延迟
 
         print(f"成功采集 {success_count}/{num_frames} 帧")
 
@@ -356,27 +520,28 @@ class CameraCapture:
             bbox_size = bbox_max - bbox_min
 
             # 检查XYZ范围（单位：米）
+            # 注意：点云坐标已经是米为单位，bbox_size也是米
             min_x_range = 3.0  # 至少3米宽
             min_y_range = 3.0  # 至少3米深
             min_z_range = 2.5  # 至少2.5米高
 
-            if bbox_size[0] < min_x_range * 1000:  # 转换为毫米
+            if bbox_size[0] < min_x_range:
                 is_valid = False
-                messages.append(f"✗ X方向范围不足: {bbox_size[0]/1000:.2f}m < {min_x_range}m")
+                messages.append(f"✗ X方向范围不足: {bbox_size[0]:.2f}m < {min_x_range}m")
             else:
-                messages.append(f"✓ X方向范围合格: {bbox_size[0]/1000:.2f}m")
+                messages.append(f"✓ X方向范围合格: {bbox_size[0]:.2f}m")
 
-            if bbox_size[1] < min_y_range * 1000:
+            if bbox_size[1] < min_y_range:
                 is_valid = False
-                messages.append(f"✗ Y方向范围不足: {bbox_size[1]/1000:.2f}m < {min_y_range}m")
+                messages.append(f"✗ Y方向范围不足: {bbox_size[1]:.2f}m < {min_y_range}m")
             else:
-                messages.append(f"✓ Y方向范围合格: {bbox_size[1]/1000:.2f}m")
+                messages.append(f"✓ Y方向范围合格: {bbox_size[1]:.2f}m")
 
-            if bbox_size[2] < min_z_range * 1000:
+            if bbox_size[2] < min_z_range:
                 is_valid = False
-                messages.append(f"✗ Z方向范围不足: {bbox_size[2]/1000:.2f}m < {min_z_range}m")
+                messages.append(f"✗ Z方向范围不足: {bbox_size[2]:.2f}m < {min_z_range}m")
             else:
-                messages.append(f"✓ Z方向范围合格: {bbox_size[2]/1000:.2f}m")
+                messages.append(f"✓ Z方向范围合格: {bbox_size[2]:.2f}m")
 
         return is_valid, messages
 
@@ -444,6 +609,9 @@ class CameraCapture:
         elif self.camera_type == 'kinect' and self.camera is not None:
             self.camera.stop()
             print("Kinect相机已停止")
+        elif self.camera_type == 'orbbec' and self.pipeline is not None:
+            self.pipeline.stop()
+            print("Orbbec相机已停止")
 
     def __del__(self):
         """析构函数"""
