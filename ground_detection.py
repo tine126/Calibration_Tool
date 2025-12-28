@@ -1,0 +1,314 @@
+"""
+地面检测模块
+基于最大内点数的RANSAC算法检测地面平面，并进行噪声过滤
+注意：点云单位为毫米(mm)
+"""
+
+import open3d as o3d
+import numpy as np
+from typing import Tuple, Dict
+import copy
+
+
+def detect_ground_plane(pcd: o3d.geometry.PointCloud,
+                        distance_threshold: float = 200,
+                        ransac_n: int = 3,
+                        num_iterations: int = 10000) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """
+    基于最大内点数检测地面平面
+    适用于相机倾斜安装的情况，选择点数最多的平面作为地面
+
+    Args:
+        pcd: 输入点云（单位：毫米）
+        distance_threshold: RANSAC距离阈值（毫米），默认200mm
+        ransac_n: RANSAC最小点数，默认3
+        num_iterations: RANSAC最大迭代次数，默认10000
+
+    Returns:
+        plane_model: 平面模型参数 [a, b, c, d]，平面方程为 ax + by + cz + d = 0
+        ground_inliers: 地面点的索引数组
+        stats: 统计信息字典
+    """
+    print(f"\n{'='*80}")
+    print("地面平面检测（基于最大内点数）")
+    print(f"{'='*80}")
+    print(f"输入点云数量: {len(pcd.points):,}")
+    print(f"RANSAC距离阈值: {distance_threshold} mm ({distance_threshold/1000:.3f} m)")
+    print(f"RANSAC迭代次数: {num_iterations}")
+
+    # 执行RANSAC平面检测
+    plane_model, inliers = pcd.segment_plane(
+        distance_threshold=distance_threshold,
+        ransac_n=ransac_n,
+        num_iterations=num_iterations
+    )
+
+    # 计算统计信息
+    points = np.asarray(pcd.points)
+    ground_points = points[inliers]
+
+    inlier_ratio = len(inliers) / len(points)
+
+    # 计算法向量
+    normal = np.array([plane_model[0], plane_model[1], plane_model[2]])
+    normal = normal / np.linalg.norm(normal)
+    if normal[2] < 0:
+        normal = -normal
+
+    z_angle = np.degrees(np.arccos(np.clip(normal[2], -1, 1)))
+
+    print(f"\n检测结果:")
+    print(f"  地面点数: {len(inliers):,} ({inlier_ratio*100:.2f}%)")
+    print(f"  地面Z值范围: [{ground_points[:, 2].min():.1f}, {ground_points[:, 2].max():.1f}] mm")
+    print(f"  地面Z值均值: {ground_points[:, 2].mean():.1f} mm ({ground_points[:, 2].mean()/1000:.3f} m)")
+    print(f"  地面Z值标准差: {ground_points[:, 2].std():.1f} mm")
+    print(f"  地面法向量: ({normal[0]:.6f}, {normal[1]:.6f}, {normal[2]:.6f})")
+    print(f"  与Z轴夹角: {z_angle:.2f}°")
+    print(f"  平面方程: {plane_model[0]:.6f}*x + {plane_model[1]:.6f}*y + {plane_model[2]:.6f}*z + {plane_model[3]:.6f} = 0")
+    print(f"{'='*80}\n")
+
+    stats = {
+        'plane_model': plane_model,
+        'normal': normal,
+        'z_angle': z_angle,
+        'inlier_count': len(inliers),
+        'inlier_ratio': inlier_ratio,
+        'z_min': ground_points[:, 2].min(),
+        'z_max': ground_points[:, 2].max(),
+        'z_mean': ground_points[:, 2].mean(),
+        'z_std': ground_points[:, 2].std()
+    }
+
+    return plane_model, inliers, stats
+
+
+def filter_ground_noise(pcd: o3d.geometry.PointCloud,
+                        ground_inliers: np.ndarray,
+                        plane_model: np.ndarray,
+                        distance_threshold: float = 100,
+                        nb_neighbors: int = 20,
+                        std_ratio: float = 2.0) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """
+    过滤地面点云中的噪声点
+
+    Args:
+        pcd: 完整点云
+        ground_inliers: 地面点的索引
+        plane_model: 地面平面模型
+        distance_threshold: 点到平面距离阈值（毫米），超过此距离视为噪声，默认100mm
+        nb_neighbors: 统计离群值检测的邻域点数，默认20
+        std_ratio: 统计离群值检测的标准差倍数，默认2.0
+
+    Returns:
+        valid_ground_inliers: 有效地面点的索引（相对于完整点云）
+        noise_inliers: 噪声点的索引（相对于完整点云）
+        stats: 统计信息字典
+    """
+    print(f"\n{'='*80}")
+    print("地面噪声过滤")
+    print(f"{'='*80}")
+    print(f"原始地面点数: {len(ground_inliers):,}")
+    print(f"过滤方法: 距离阈值 + 统计离群值检测")
+    print(f"  距离阈值: {distance_threshold} mm")
+    print(f"  统计检测: nb_neighbors={nb_neighbors}, std_ratio={std_ratio}")
+
+    # 提取地面点云
+    ground_pcd = pcd.select_by_index(ground_inliers)
+    ground_points = np.asarray(ground_pcd.points)
+
+    # 方法1: 计算每个点到平面的距离
+    a, b, c, d = plane_model
+    distances = np.abs(
+        a * ground_points[:, 0] +
+        b * ground_points[:, 1] +
+        c * ground_points[:, 2] +
+        d
+    ) / np.sqrt(a**2 + b**2 + c**2)
+
+    # 距离超过阈值的为噪声
+    distance_noise_mask = distances > distance_threshold
+
+    # 方法2: 统计离群值检测
+    cl, stat_inliers = ground_pcd.remove_statistical_outlier(
+        nb_neighbors=nb_neighbors,
+        std_ratio=std_ratio
+    )
+
+    stat_outliers_mask = np.ones(len(ground_points), dtype=bool)
+    stat_outliers_mask[stat_inliers] = False
+
+    # 综合判断：距离超阈值 OR 统计离群点 = 噪声
+    noise_mask = distance_noise_mask | stat_outliers_mask
+    valid_mask = ~noise_mask
+
+    # 转换为相对于完整点云的索引
+    # ground_inliers 是索引数组，需要先转换为numpy数组再使用布尔掩码
+    ground_inliers_array = np.asarray(ground_inliers)
+    valid_ground_inliers = ground_inliers_array[valid_mask]
+    noise_inliers = ground_inliers_array[noise_mask]
+
+    print(f"\n过滤结果:")
+    print(f"  有效地面点数: {len(valid_ground_inliers):,} ({len(valid_ground_inliers)/len(ground_inliers)*100:.2f}%)")
+    print(f"  噪声点数: {len(noise_inliers):,} ({len(noise_inliers)/len(ground_inliers)*100:.2f}%)")
+    print(f"  点到平面距离 - 均值: {distances[valid_mask].mean():.2f} mm, 标准差: {distances[valid_mask].std():.2f} mm")
+    print(f"{'='*80}\n")
+
+    stats = {
+        'valid_count': len(valid_ground_inliers),
+        'noise_count': len(noise_inliers),
+        'valid_ratio': len(valid_ground_inliers) / len(ground_inliers),
+        'noise_ratio': len(noise_inliers) / len(ground_inliers),
+        'distance_mean': distances[valid_mask].mean(),
+        'distance_std': distances[valid_mask].std()
+    }
+
+    return valid_ground_inliers, noise_inliers, stats
+
+
+def compute_ground_normal(plane_model: np.ndarray) -> np.ndarray:
+    """
+    从平面模型计算地面法向量
+
+    Args:
+        plane_model: 平面模型参数 [a, b, c, d]
+
+    Returns:
+        normal: 归一化的地面法向量 [nx, ny, nz]
+    """
+    # 平面方程 ax + by + cz + d = 0 的法向量为 (a, b, c)
+    normal = np.array([plane_model[0], plane_model[1], plane_model[2]])
+
+    # 归一化法向量
+    normal = normal / np.linalg.norm(normal)
+
+    # 确保法向量指向上方（z分量为正）
+    if normal[2] < 0:
+        normal = -normal
+
+    return normal
+
+
+def compute_rotation_matrix(ground_normal: np.ndarray,
+                            target_normal: np.ndarray = None) -> np.ndarray:
+    """
+    计算将地面法向量旋转到目标法向量的旋转矩阵
+
+    Args:
+        ground_normal: 当前地面法向量
+        target_normal: 目标法向量，默认为 [0, 0, 1] (Z轴正方向，即XY平面)
+
+    Returns:
+        rotation_matrix: 3x3旋转矩阵
+    """
+    if target_normal is None:
+        target_normal = np.array([0.0, 0.0, 1.0])
+
+    print(f"\n{'='*80}")
+    print("计算旋转矩阵")
+    print(f"{'='*80}")
+    print(f"当前地面法向量: ({ground_normal[0]:.6f}, {ground_normal[1]:.6f}, {ground_normal[2]:.6f})")
+    print(f"目标法向量 (XY平面): ({target_normal[0]:.6f}, {target_normal[1]:.6f}, {target_normal[2]:.6f})")
+
+    # 计算旋转轴（叉积）
+    rotation_axis = np.cross(ground_normal, target_normal)
+    rotation_axis_norm = np.linalg.norm(rotation_axis)
+
+    # 如果法向量已经对齐，返回单位矩阵
+    if rotation_axis_norm < 1e-6:
+        print("\n地面法向量已经与目标法向量对齐，无需旋转")
+        print("旋转矩阵: 单位矩阵")
+        print(f"{'='*80}\n")
+        return np.eye(3)
+
+    # 归一化旋转轴
+    rotation_axis = rotation_axis / rotation_axis_norm
+
+    # 计算旋转角度（点积）
+    cos_angle = np.dot(ground_normal, target_normal)
+    cos_angle = np.clip(cos_angle, -1.0, 1.0)  # 防止数值误差
+    angle = np.arccos(cos_angle)
+
+    print(f"\n旋转参数:")
+    print(f"  旋转轴: ({rotation_axis[0]:.6f}, {rotation_axis[1]:.6f}, {rotation_axis[2]:.6f})")
+    print(f"  旋转角度: {np.degrees(angle):.2f}° ({angle:.6f} rad)")
+
+    # 使用罗德里格斯公式计算旋转矩阵
+    # R = I + sin(θ)K + (1-cos(θ))K²
+    # 其中K是旋转轴的反对称矩阵
+    K = np.array([
+        [0, -rotation_axis[2], rotation_axis[1]],
+        [rotation_axis[2], 0, -rotation_axis[0]],
+        [-rotation_axis[1], rotation_axis[0], 0]
+    ])
+
+    rotation_matrix = (np.eye(3) +
+                      np.sin(angle) * K +
+                      (1 - np.cos(angle)) * np.dot(K, K))
+
+    print(f"\n旋转矩阵 R (3x3):")
+    for i in range(3):
+        print(f"  [{rotation_matrix[i, 0]:+.6f}, {rotation_matrix[i, 1]:+.6f}, {rotation_matrix[i, 2]:+.6f}]")
+
+    # 验证旋转矩阵
+    rotated_normal = np.dot(rotation_matrix, ground_normal)
+    print(f"\n验证: 旋转后的法向量: ({rotated_normal[0]:.6f}, {rotated_normal[1]:.6f}, {rotated_normal[2]:.6f})")
+    print(f"与目标法向量的差异: {np.linalg.norm(rotated_normal - target_normal):.8f}")
+    print(f"{'='*80}\n")
+
+    return rotation_matrix
+
+
+def visualize_ground_detection(pcd: o3d.geometry.PointCloud,
+                               ground_inliers: np.ndarray,
+                               noise_inliers: np.ndarray = None,
+                               title: str = "地面检测结果"):
+    """
+    可视化地面检测结果
+
+    Args:
+        pcd: 完整点云
+        ground_inliers: 有效地面点索引
+        noise_inliers: 噪声点索引（可选）
+        title: 窗口标题
+    """
+    # 地面点云 - 绿色
+    ground_pcd = pcd.select_by_index(ground_inliers)
+    ground_pcd.paint_uniform_color([0.0, 0.8, 0.0])
+
+    # 非地面点云 - 红色
+    non_ground_inliers = np.setdiff1d(np.arange(len(pcd.points)),
+                                      np.concatenate([ground_inliers, noise_inliers]) if noise_inliers is not None else ground_inliers)
+    non_ground_pcd = pcd.select_by_index(non_ground_inliers)
+    non_ground_pcd.paint_uniform_color([0.8, 0.2, 0.2])
+
+    geometries = [ground_pcd, non_ground_pcd]
+
+    # 噪声点云 - 蓝色（如果有）
+    if noise_inliers is not None and len(noise_inliers) > 0:
+        noise_pcd = pcd.select_by_index(noise_inliers)
+        noise_pcd.paint_uniform_color([0.0, 0.0, 1.0])
+        geometries.append(noise_pcd)
+
+    # 添加坐标系
+    coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=500, origin=[0, 0, 0])
+    geometries.append(coord_frame)
+
+    print(f"\n显示可视化结果...")
+    print(f"颜色说明:")
+    print(f"  绿色 = 有效地面点 ({len(ground_inliers):,} 点)")
+    if noise_inliers is not None and len(noise_inliers) > 0:
+        print(f"  蓝色 = 地面噪声点 ({len(noise_inliers):,} 点)")
+    print(f"  红色 = 非地面点 ({len(non_ground_inliers):,} 点)")
+    print(f"  坐标系 = 红(X), 绿(Y), 蓝(Z)\n")
+
+    o3d.visualization.draw_geometries(
+        geometries,
+        window_name=title,
+        width=1600,
+        height=900
+    )
+
+
+if __name__ == "__main__":
+    print("地面检测模块")
+    print("请通过主程序调用此模块")

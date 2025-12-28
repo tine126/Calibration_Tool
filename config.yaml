@@ -22,11 +22,17 @@ preprocessing:
     min_points: 10    # 最小点数（形成一个簇所需的最小点数）
     max_points: 100000 # 最大点数（单个簇的最大点数）
 
-# 地面分割参数
-ground_segmentation:
-  distance_threshold: 0.02  # RANSAC距离阈值（米）
-  ransac_n: 3              # RANSAC最小点数
-  num_iterations: 1000     # RANSAC迭代次数
+# 地面检测参数 - RANSAC平面检测（注意：点云单位为毫米）
+ground_detection:
+  distance_threshold: 200      # RANSAC距离阈值（毫米）
+  ransac_n: 3                  # RANSAC最小点数（拟合平面所需）
+  num_iterations: 10000        # RANSAC最大迭代次数
+
+  # 噪声过滤参数
+  noise_filter:
+    distance_threshold: 100    # 点到平面距离阈值（毫米）
+    nb_neighbors: 20           # 统计离群值检测的邻域点数
+    std_ratio: 2.0             # 统计离群值检测的标准差倍数
 
 # 篮筐检测参数
 hoop_detection:

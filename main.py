@@ -13,6 +13,11 @@ from pathlib import Path
 # 导入预处理模块
 from preprocess import preprocess_pointcloud
 
+# 导入地面检测模块
+from ground_detection import (detect_ground_plane, filter_ground_noise,
+                               compute_ground_normal, compute_rotation_matrix,
+                               visualize_ground_detection)
+
 # 导入可视化和统计模块
 from visualization import (PointCloudStatistics, compare_statistics,
                            visualize_comparison, plot_statistics_chart,
@@ -191,14 +196,70 @@ def main():
         chart_file = os.path.join(config['point_cloud']['output_dir'], "statistics_chart.png")
         plot_statistics_chart(stats_list, save_path=chart_file)
 
+    # 8. 地面检测
+    print("\n步骤8: 地面检测")
+    print("-" * 60)
+
+    ground_config = config['ground_detection']
+
+    # 8.1 检测地面平面
+    plane_model, ground_inliers, ground_stats = detect_ground_plane(
+        pcd_filtered,
+        distance_threshold=ground_config['distance_threshold'],
+        ransac_n=ground_config['ransac_n'],
+        num_iterations=ground_config['num_iterations']
+    )
+
+    # 8.2 过滤地面噪声
+    valid_ground_inliers, noise_inliers, noise_stats = filter_ground_noise(
+        pcd_filtered,
+        ground_inliers,
+        plane_model,
+        distance_threshold=ground_config['noise_filter']['distance_threshold'],
+        nb_neighbors=ground_config['noise_filter']['nb_neighbors'],
+        std_ratio=ground_config['noise_filter']['std_ratio']
+    )
+
+    # 8.3 计算旋转矩阵
+    ground_normal = compute_ground_normal(plane_model)
+    rotation_matrix = compute_rotation_matrix(ground_normal)
+
+    # 8.4 保存地面检测结果
+    ground_pcd = pcd_filtered.select_by_index(valid_ground_inliers)
+    ground_file = os.path.join(output_dir, "ground_plane.ply")
+    save_pointcloud(ground_pcd, ground_file)
+
+    # 保存旋转矩阵
+    rotation_matrix_file = os.path.join(output_dir, "rotation_matrix.txt")
+    with open(rotation_matrix_file, 'w', encoding='utf-8') as f:
+        f.write("地面检测与旋转矩阵\n")
+        f.write("="*80 + "\n\n")
+        f.write("旋转矩阵 R (3x3):\n")
+        for i in range(3):
+            f.write(f"[{rotation_matrix[i, 0]:+.10f}, {rotation_matrix[i, 1]:+.10f}, {rotation_matrix[i, 2]:+.10f}]\n")
+        f.write(f"\n地面法向量:\n")
+        f.write(f"[{ground_normal[0]:.10f}, {ground_normal[1]:.10f}, {ground_normal[2]:.10f}]\n")
+        f.write(f"\n地面统计:\n")
+        f.write(f"地面点数: {noise_stats['valid_count']:,}\n")
+        f.write(f"噪声点数: {noise_stats['noise_count']:,}\n")
+        f.write(f"地面Z均值: {ground_stats['z_mean']:.3f} mm\n")
+    print(f"旋转矩阵已保存: {rotation_matrix_file}")
+
+    # 8.5 可视化地面检测结果
+    if config['visualization']['enabled']:
+        visualize_ground_detection(pcd_filtered, valid_ground_inliers, noise_inliers,
+                                   title="地面检测结果")
+
     print("\n" + "="*60)
-    print("预处理流程完成!")
+    print("自动标定流程完成!")
     print("="*60)
     print(f"\n处理结果:")
     print(f"  原始点云: {stats_original.point_count:,} 点")
     print(f"  预处理后: {stats_filtered.point_count:,} 点 (保留率: {stats_filtered.point_count/stats_original.point_count*100:.2f}%)")
     print(f"  检测到簇: {len(clusters)} 个")
-    print(f"\n下一步: 地面分割和篮筐检测（待实现）\n")
+    print(f"  地面点数: {noise_stats['valid_count']:,} 点 ({noise_stats['valid_count']/stats_filtered.point_count*100:.2f}%)")
+    print(f"  地面法向量与Z轴夹角: {ground_stats['z_angle']:.2f}°")
+    print(f"\n下一步: 篮筐检测和中心位置计算（待实现）\n")
 
 
 if __name__ == "__main__":
