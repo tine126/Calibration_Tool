@@ -258,6 +258,150 @@ def compute_rotation_matrix(ground_normal: np.ndarray,
     return rotation_matrix
 
 
+def apply_rotation_and_compute_plane(pcd: o3d.geometry.PointCloud,
+                                     ground_inliers: np.ndarray,
+                                     rotation_matrix: np.ndarray) -> Tuple[o3d.geometry.PointCloud, np.ndarray, Dict]:
+    """
+    应用旋转矩阵到点云，并计算旋转后地面的平面方程
+
+    Args:
+        pcd: 完整点云
+        ground_inliers: 地面点索引
+        rotation_matrix: 旋转矩阵
+
+    Returns:
+        rotated_pcd: 旋转后的完整点云
+        ground_plane_equation: 旋转后地面的平面方程 [a, b, c, d]
+        stats: 统计信息字典
+    """
+    print(f"\n{'='*80}")
+    print("应用旋转矩阵并计算地面平面方程")
+    print(f"{'='*80}")
+
+    # 1. 复制点云并应用旋转
+    rotated_pcd = copy.deepcopy(pcd)
+    rotated_pcd.rotate(rotation_matrix, center=(0, 0, 0))
+
+    print(f"点云已旋转")
+
+    # 2. 提取旋转后的地面点
+    rotated_ground_pcd = rotated_pcd.select_by_index(ground_inliers)
+    rotated_ground_points = np.asarray(rotated_ground_pcd.points)
+
+    print(f"地面点数: {len(rotated_ground_points):,}")
+
+    # 3. 计算旋转后地面点的Z值统计
+    z_values = rotated_ground_points[:, 2]
+    z_min = z_values.min()
+    z_max = z_values.max()
+    z_mean = z_values.mean()
+    z_median = np.median(z_values)
+    z_std = z_values.std()
+
+    print(f"\n旋转后地面Z值统计:")
+    print(f"  Z最小值: {z_min:.3f} mm")
+    print(f"  Z最大值: {z_max:.3f} mm")
+    print(f"  Z均值: {z_mean:.3f} mm")
+    print(f"  Z中位数: {z_median:.3f} mm")
+    print(f"  Z标准差: {z_std:.3f} mm")
+    print(f"  Z跨度: {z_max - z_min:.3f} mm")
+
+    # 4. 计算地面平面方程
+    # 理想情况下，旋转后地面应该平行于XY平面，即法向量接近(0, 0, 1)
+    # 平面方程: z = d (即 0*x + 0*y + 1*z - d = 0)
+    # 使用Z的中位数或均值作为d值
+
+    # 方法1: 使用Z中位数（对离群值更鲁棒）
+    d_median = -z_median
+    plane_eq_median = np.array([0.0, 0.0, 1.0, d_median])
+
+    # 方法2: 使用Z均值
+    d_mean = -z_mean
+    plane_eq_mean = np.array([0.0, 0.0, 1.0, d_mean])
+
+    # 方法3: 使用RANSAC重新拟合（更精确）
+    print(f"\n使用RANSAC重新拟合旋转后的地面平面...")
+    plane_model_fitted, inliers_fitted = rotated_ground_pcd.segment_plane(
+        distance_threshold=50,  # 50mm
+        ransac_n=3,
+        num_iterations=1000
+    )
+
+    # 归一化平面方程的法向量
+    a, b, c, d = plane_model_fitted
+    normal_fitted = np.array([a, b, c])
+    normal_norm = np.linalg.norm(normal_fitted)
+    plane_eq_fitted = plane_model_fitted / normal_norm
+
+    # 确保法向量指向上方
+    if plane_eq_fitted[2] < 0:
+        plane_eq_fitted = -plane_eq_fitted
+
+    print(f"RANSAC拟合结果:")
+    print(f"  内点数: {len(inliers_fitted):,} ({len(inliers_fitted)/len(rotated_ground_points)*100:.2f}%)")
+    print(f"  平面方程: {plane_eq_fitted[0]:.6f}*x + {plane_eq_fitted[1]:.6f}*y + {plane_eq_fitted[2]:.6f}*z + {plane_eq_fitted[3]:.6f} = 0")
+    print(f"  法向量: ({plane_eq_fitted[0]:.6f}, {plane_eq_fitted[1]:.6f}, {plane_eq_fitted[2]:.6f})")
+
+    # 计算法向量与Z轴的夹角
+    z_axis = np.array([0.0, 0.0, 1.0])
+    cos_angle = np.dot(plane_eq_fitted[:3], z_axis)
+    angle = np.degrees(np.arccos(np.clip(cos_angle, -1, 1)))
+
+    print(f"  法向量与Z轴夹角: {angle:.4f}°")
+
+    # 验证平面质量
+    print(f"\n平面质量验证:")
+
+    # 计算所有地面点到拟合平面的距离
+    distances = np.abs(
+        plane_eq_fitted[0] * rotated_ground_points[:, 0] +
+        plane_eq_fitted[1] * rotated_ground_points[:, 1] +
+        plane_eq_fitted[2] * rotated_ground_points[:, 2] +
+        plane_eq_fitted[3]
+    )
+
+    dist_mean = distances.mean()
+    dist_std = distances.std()
+    dist_max = distances.max()
+
+    print(f"  点到平面距离 - 均值: {dist_mean:.3f} mm")
+    print(f"  点到平面距离 - 标准差: {dist_std:.3f} mm")
+    print(f"  点到平面距离 - 最大值: {dist_max:.3f} mm")
+
+    # 检查是否成功对齐到XY平面
+    if angle < 1.0:  # 法向量与Z轴夹角小于1度
+        print(f"  ✓ 地面成功对齐到XY平面 (夹角 < 1°)")
+    elif angle < 5.0:
+        print(f"  ⚠ 地面基本对齐到XY平面 (夹角 < 5°)")
+    else:
+        print(f"  ✗ 地面未能完全对齐到XY平面 (夹角 = {angle:.2f}°)")
+
+    # 选择最佳平面方程（使用RANSAC拟合的结果）
+    ground_plane_equation = plane_eq_fitted
+
+    # 统计信息
+    stats = {
+        'z_min': z_min,
+        'z_max': z_max,
+        'z_mean': z_mean,
+        'z_median': z_median,
+        'z_std': z_std,
+        'z_span': z_max - z_min,
+        'plane_equation': ground_plane_equation.tolist(),
+        'plane_normal': plane_eq_fitted[:3].tolist(),
+        'normal_z_angle_deg': angle,
+        'ransac_inlier_count': len(inliers_fitted),
+        'ransac_inlier_ratio': len(inliers_fitted) / len(rotated_ground_points),
+        'distance_to_plane_mean': dist_mean,
+        'distance_to_plane_std': dist_std,
+        'distance_to_plane_max': dist_max
+    }
+
+    print(f"{'='*80}\n")
+
+    return rotated_pcd, ground_plane_equation, stats
+
+
 def visualize_ground_detection(pcd: o3d.geometry.PointCloud,
                                ground_inliers: np.ndarray,
                                noise_inliers: np.ndarray = None,
