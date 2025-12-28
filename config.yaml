@@ -27,6 +27,7 @@ ground_detection:
   distance_threshold: 200      # RANSAC距离阈值（毫米）
   ransac_n: 3                  # RANSAC最小点数（拟合平面所需）
   num_iterations: 10000        # RANSAC最大迭代次数
+  random_seed: 42              # 随机数种子（保证结果可复现）
 
   # 噪声过滤参数
   noise_filter:
@@ -37,8 +38,9 @@ ground_detection:
 # 篮筐检测参数
 hoop_detection:
   standard_diameter: 0.45   # 标准篮筐直径（米）
-  height_range: [2.5, 3.5]  # 篮筐高度范围（米）
-  diameter_tolerance: 0.05  # 直径容差（米）
+  height_range: [2.9, 3.2]  # 篮筐高度范围（米）
+  diameter_tolerance: 0.025  # 直径容差（米），±50mm
+  random_seed: 42           # 随机数种子（保证结果可复现）
 
 # 可视化参数
 visualization:

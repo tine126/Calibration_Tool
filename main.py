@@ -9,6 +9,7 @@ import yaml
 import os
 import sys
 import copy
+import json
 from pathlib import Path
 
 # 导入预处理模块
@@ -24,6 +25,9 @@ from ground_detection import (detect_ground_plane, filter_ground_noise,
 from visualization import (PointCloudStatistics, compare_statistics,
                            visualize_comparison, plot_statistics_chart,
                            generate_report)
+
+# 导入篮筐检测模块
+from hoop_detection import detect_hoop, verify_hoop, visualize_hoop_detection
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -209,7 +213,8 @@ def main():
         pcd_filtered,
         distance_threshold=ground_config['distance_threshold'],
         ransac_n=ground_config['ransac_n'],
-        num_iterations=ground_config['num_iterations']
+        num_iterations=ground_config['num_iterations'],
+        random_seed=ground_config.get('random_seed', 42)  # 使用配置文件中的随机数种子，默认42
     )
 
     # 8.2 过滤地面噪声
@@ -438,6 +443,108 @@ def main():
             height=900
         )
 
+    # 9. 篮筐检测
+    print("\n步骤9: 篮筐检测")
+    print("-" * 60)
+
+    hoop_config = config['hoop_detection']
+
+    hoop_info = detect_hoop(
+        pcd_filtered,
+        rotation_matrix,
+        ground_plane_equation,
+        translation_vector,
+        standard_diameter=hoop_config['standard_diameter'] * 1000,  # 转换为毫米
+        diameter_tolerance=hoop_config['diameter_tolerance'] * 1000,  # 转换为毫米
+        height_range=(hoop_config['height_range'][0] * 1000, hoop_config['height_range'][1] * 1000),  # 转换为毫米
+        random_seed=hoop_config.get('random_seed', 42)  # 使用配置文件中的随机数种子，默认42
+    )
+
+    if hoop_info is None:
+        print(f"\n警告: 未能检测到篮筐")
+        print(f"可能的原因：")
+        print(f"  1. 点云中没有篮筐")
+        print(f"  2. 篮筐直径不在标准范围内")
+        print(f"  3. 篮筐高度不符合要求")
+        print(f"  4. RANSAC参数需要调整")
+        print(f"\n将继续完成其他步骤...")
+    else:
+        # 9.1 验证篮筐
+        is_valid, messages = verify_hoop(
+            hoop_info,
+            standard_diameter=hoop_config['standard_diameter'] * 1000,
+            diameter_tolerance=hoop_config['diameter_tolerance'] * 1000
+        )
+
+        # 9.2 保存篮筐检测结果
+        hoop_report_file = os.path.join(output_dir, "hoop_detection_report.txt")
+
+        with open(hoop_report_file, 'w', encoding='utf-8') as f:
+            f.write("="*80 + "\n")
+            f.write("篮筐检测报告\n")
+            f.write("="*80 + "\n\n")
+
+            f.write("篮筐中心位置（最终坐标系，毫米）:\n")
+            f.write(f"  X = {hoop_info['center_3d'][0]:.3f} mm\n")
+            f.write(f"  Y = {hoop_info['center_3d'][1]:.3f} mm\n")
+            f.write(f"  Z = {hoop_info['center_3d'][2]:.3f} mm\n\n")
+
+            f.write("篮筐中心位置（最终坐标系，米）:\n")
+            f.write(f"  X = {hoop_info['center_3d'][0]/1000:.6f} m\n")
+            f.write(f"  Y = {hoop_info['center_3d'][1]/1000:.6f} m\n")
+            f.write(f"  Z = {hoop_info['center_3d'][2]/1000:.6f} m\n\n")
+
+            f.write("篮筐参数:\n")
+            f.write(f"  直径: {hoop_info['diameter']:.3f} mm ({hoop_info['diameter']/1000:.6f} m)\n")
+            f.write(f"  半径: {hoop_info['radius']:.3f} mm ({hoop_info['radius']/1000:.6f} m)\n")
+            f.write(f"  篮筐平面高度: {hoop_info['hoop_plane_z']:.3f} mm ({hoop_info['hoop_plane_z']/1000:.6f} m)\n")
+            f.write(f"  离地高度: {hoop_info['height_above_ground']:.3f} mm ({hoop_info['height_above_ground']/1000:.6f} m)\n")
+            f.write(f"  直径误差: {hoop_info['diameter_error']:.3f} mm ({hoop_info['diameter_error_ratio']*100:.2f}%)\n")
+            f.write(f"  高度误差: {hoop_info['height_error']:.3f} mm\n")
+            f.write(f"  拟合误差: {hoop_info['fit_error']:.3f} mm\n")
+            f.write(f"  Z标准差: {hoop_info['z_std']:.3f} mm\n")
+            f.write(f"  内点数: {hoop_info['inlier_count']}\n")
+            f.write(f"  内点比例: {hoop_info['inlier_ratio']*100:.2f}%\n")
+            f.write(f"  候选点数: {hoop_info['candidate_count']}\n\n")
+
+            f.write("篮筐平面方程（最终坐标系）:\n")
+            f.write(f"  {hoop_info['hoop_plane_equation'][0]:.6f}*x + {hoop_info['hoop_plane_equation'][1]:.6f}*y + {hoop_info['hoop_plane_equation'][2]:.6f}*z + {hoop_info['hoop_plane_equation'][3]:.6f} = 0\n")
+            f.write(f"  简化形式: z = {hoop_info['hoop_plane_z']:.3f} mm\n\n")
+
+            f.write("验证结果:\n")
+            f.write(f"  状态: {'通过' if is_valid else '失败'}\n")
+            for msg in messages:
+                f.write(f"  {msg}\n")
+
+            f.write("\n" + "="*80 + "\n")
+
+        print(f"\n篮筐检测报告已保存: {hoop_report_file}")
+
+        # 9.3 更新config.json，添加篮筐中心位置
+        with open(config_output_file, 'r', encoding='utf-8') as f:
+            output_config = json.load(f)
+
+        output_config['hoop_center'] = hoop_info['center_3d'].tolist()
+        output_config['metadata']['hoop_detection'] = {
+            'diameter_mm': float(hoop_info['diameter']),
+            'height_above_ground_mm': float(hoop_info['height_above_ground']),
+            'fit_error_mm': float(hoop_info['fit_error']),
+            'z_std_mm': float(hoop_info['z_std']),
+            'inlier_count': int(hoop_info['inlier_count']),
+            'inlier_ratio': float(hoop_info['inlier_ratio']),
+            'validation_passed': is_valid
+        }
+
+        with open(config_output_file, 'w', encoding='utf-8') as f:
+            json.dump(output_config, f, indent=2, ensure_ascii=False)
+
+        print(f"篮筐中心位置已添加到配置文件: {config_output_file}")
+
+        # 9.4 可视化篮筐检测结果
+        if config['visualization']['enabled']:
+            visualize_hoop_detection(pcd_filtered, rotation_matrix, translation_vector,
+                                   hoop_info, ground_plane_equation)
+
     print("\n" + "="*60)
     print("自动标定流程完成!")
     print("="*60)
@@ -449,12 +556,24 @@ def main():
     print(f"\n标定结果:")
     print(f"  旋转前地面法向量与Z轴夹角: {ground_stats['z_angle']:.2f}°")
     print(f"  旋转后地面法向量与Z轴夹角: {rotation_stats['normal_z_angle_deg']:.4f}°")
-    print(f"  地面平面方程: z ≈ {-ground_plane_equation[3]/ground_plane_equation[2]:.1f} mm ({-ground_plane_equation[3]/ground_plane_equation[2]/1000:.3f} m)")
+    print(f"  地面平面方程: z = {-ground_plane_equation[3]/ground_plane_equation[2]:.1f} mm (固定为 z=0)")
+    print(f"  实际地面Z均值偏差: {rotation_stats['z_mean']:.1f} mm")
+    print(f"  实际地面Z中位数偏差: {rotation_stats['z_median']:.1f} mm")
+
+    if hoop_info is not None:
+        print(f"\n篮筐检测结果:")
+        print(f"  篮筐中心位置: ({hoop_info['center_3d'][0]/1000:.3f}, {hoop_info['center_3d'][1]/1000:.3f}, {hoop_info['center_3d'][2]/1000:.3f}) m")
+        print(f"  离地高度: {hoop_info['height_above_ground']/1000:.3f} m")
+        print(f"  直径: {hoop_info['diameter']:.1f} mm ({hoop_info['diameter']/1000:.3f} m)")
+        print(f"  验证状态: {'通过 ✓' if is_valid else '失败 ✗'}")
+
     print(f"\n输出文件:")
     print(f"  配置文件: {config_output_file}")
-    print(f"  详细结果: {rotation_matrix_file}")
+    print(f"  标定结果: {rotation_matrix_file}")
     print(f"  旋转后点云: {rotated_pcd_file}")
-    print(f"\n下一步: 篮筐检测和中心位置计算（待实现）\n")
+    if hoop_info is not None:
+        print(f"  篮筐检测报告: {hoop_report_file}")
+    print()
 
 
 if __name__ == "__main__":

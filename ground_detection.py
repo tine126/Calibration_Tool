@@ -13,7 +13,8 @@ import copy
 def detect_ground_plane(pcd: o3d.geometry.PointCloud,
                         distance_threshold: float = 200,
                         ransac_n: int = 3,
-                        num_iterations: int = 10000) -> Tuple[np.ndarray, np.ndarray, Dict]:
+                        num_iterations: int = 10000,
+                        random_seed: int = 42) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     基于最大内点数检测地面平面
     适用于相机倾斜安装的情况，选择点数最多的平面作为地面
@@ -23,6 +24,7 @@ def detect_ground_plane(pcd: o3d.geometry.PointCloud,
         distance_threshold: RANSAC距离阈值（毫米），默认200mm
         ransac_n: RANSAC最小点数，默认3
         num_iterations: RANSAC最大迭代次数，默认10000
+        random_seed: 随机数种子，默认42（设置后结果可复现）
 
     Returns:
         plane_model: 平面模型参数 [a, b, c, d]，平面方程为 ax + by + cz + d = 0
@@ -35,6 +37,10 @@ def detect_ground_plane(pcd: o3d.geometry.PointCloud,
     print(f"输入点云数量: {len(pcd.points):,}")
     print(f"RANSAC距离阈值: {distance_threshold} mm ({distance_threshold/1000:.3f} m)")
     print(f"RANSAC迭代次数: {num_iterations}")
+    print(f"随机数种子: {random_seed}")
+
+    # 设置随机数种子以保证结果可复现
+    o3d.utility.random.seed(random_seed)
 
     # 执行RANSAC平面检测
     plane_model, inliers = pcd.segment_plane(
@@ -356,15 +362,17 @@ def apply_rotation_and_compute_plane(pcd: o3d.geometry.PointCloud,
     # 使用Z的中位数或均值作为d值
 
     # 方法1: 使用Z中位数（对离群值更鲁棒）
-    d_median = -z_median
+    d_median = -z_median_translated
     plane_eq_median = np.array([0.0, 0.0, 1.0, d_median])
 
     # 方法2: 使用Z均值
-    d_mean = -z_mean
+    d_mean = -z_mean_translated
     plane_eq_mean = np.array([0.0, 0.0, 1.0, d_mean])
 
     # 方法3: 使用RANSAC重新拟合（更精确）
     print(f"\n使用RANSAC重新拟合旋转后的地面平面...")
+    # 设置随机数种子以保证结果可复现
+    o3d.utility.random.seed(42)
     plane_model_fitted, inliers_fitted = rotated_ground_pcd.segment_plane(
         distance_threshold=50,  # 50mm
         ransac_n=3,
@@ -420,8 +428,16 @@ def apply_rotation_and_compute_plane(pcd: o3d.geometry.PointCloud,
     else:
         print(f"  ✗ 地面未能完全对齐到XY平面 (夹角 = {angle:.2f}°)")
 
-    # 选择最佳平面方程（使用RANSAC拟合的结果）
-    ground_plane_equation = plane_eq_fitted
+    # 选择最佳平面方程
+    # 使用简化方法：z = 0（理论上应该接近0）
+    # 强制设置地面平面方程为 z = 0
+    ground_plane_equation = np.array([0.0, 0.0, 1.0, 0.0])
+
+    print(f"\n最终地面平面方程:")
+    print(f"  强制设置为 z = 0 (0*x + 0*y + 1*z + 0 = 0)")
+    print(f"  说明: 已通过平移使地面位于 z=0 平面")
+    print(f"  实际地面Z均值偏差: {z_mean_translated:.3f} mm")
+    print(f"  实际地面Z中位数偏差: {z_median_translated:.3f} mm")
 
     # 统计信息
     stats = {
