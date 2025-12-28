@@ -1,9 +1,46 @@
 # 投篮系统自动标定工具配置文件
 
-# 点云数据路径
-point_cloud:
-  input_file: "data/1222/DepthPoints_3546026307.ply"
-  output_dir: "output"
+# 点云数据源配置
+data_source:
+  mode: "offline"  # 数据采集模式: "offline"=离线点云文件, "realtime"=实时相机采集
+
+  # 离线模式配置
+  offline:
+    input_file: "data/1222/DepthPoints_3546026307.ply"
+
+  # 实时采集模式配置
+  realtime:
+    # 相机参数
+    camera:
+      type: "realsense"  # 相机类型: "realsense", "kinect", "orbbec"等
+      serial_number: ""  # 相机序列号(为空则使用第一个可用相机)
+
+      # 采集参数
+      resolution:
+        width: 1280
+        height: 720
+      frame_rate: 30  # 帧率(fps)
+      depth_range: [0.3, 10.0]  # 深度范围(米): [最小距离, 最大距离]
+
+    # 多帧融合配置
+    multi_frame_fusion:
+      enabled: true  # 是否启用多帧融合
+      num_frames: 10  # 融合帧数
+      fusion_method: "average"  # 融合方法: "average"=平均, "median"=中值
+
+    # 点云质量检测
+    quality_check:
+      enabled: true  # 是否启用质量检测
+      min_points: 50000  # 最小点数要求
+      coverage_check: true  # 是否检查覆盖范围
+      max_retries: 3  # 质量不达标时最大重试次数
+
+# 输出配置
+output:
+  dir: "output"  # 输出目录
+  config_file: "config.json"  # 输出的转换矩阵配置文件
+  save_intermediate: true  # 是否保存中间结果
+  save_raw_pointcloud: true  # 是否保存原始采集的点云
 
 # 点云预处理参数
 preprocessing:

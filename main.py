@@ -1,6 +1,7 @@
 """
 投篮系统自动标定工具 - 主程序
 用于深度相机外参标定和篮筐中心位置检测
+支持离线点云文件和实时相机采集两种模式
 """
 
 import open3d as o3d
@@ -53,9 +54,9 @@ def load_config(config_path: str = "config.yaml") -> dict:
         sys.exit(1)
 
 
-def load_pointcloud(file_path: str) -> o3d.geometry.PointCloud:
+def load_pointcloud_from_file(file_path: str) -> o3d.geometry.PointCloud:
     """
-    加载点云文件
+    从文件加载点云
 
     Args:
         file_path: 点云文件路径
@@ -79,6 +80,91 @@ def load_pointcloud(file_path: str) -> o3d.geometry.PointCloud:
         return pcd
     except Exception as e:
         print(f"错误: 无法加载点云文件: {e}")
+        sys.exit(1)
+
+
+def load_pointcloud_from_camera(config: dict) -> o3d.geometry.PointCloud:
+    """
+    从相机实时采集点云
+
+    Args:
+        config: 配置字典
+
+    Returns:
+        点云对象
+    """
+    print(f"\n正在从相机采集点云...")
+
+    try:
+        # 导入相机采集模块
+        from camera_capture import CameraCapture
+
+        camera_config = config['data_source']['realtime']
+
+        # 初始化相机
+        camera = CameraCapture(camera_config)
+
+        # 采集点云
+        pcd = camera.capture_pointcloud()
+
+        if pcd is None:
+            print(f"错误: 点云采集失败")
+            sys.exit(1)
+
+        print(f"点云采集成功!")
+        print(f"  点云数量: {len(pcd.points)}")
+        print(f"  是否有颜色: {pcd.has_colors()}")
+        print(f"  是否有法向量: {pcd.has_normals()}")
+
+        # 保存原始采集的点云
+        if config['output'].get('save_raw_pointcloud', True):
+            output_dir = config['output']['dir']
+            os.makedirs(output_dir, exist_ok=True)
+
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            raw_pcd_file = os.path.join(output_dir, f"raw_pointcloud_{timestamp}.ply")
+            o3d.io.write_point_cloud(raw_pcd_file, pcd)
+            print(f"  原始点云已保存: {raw_pcd_file}")
+
+        return pcd
+
+    except ImportError as e:
+        print(f"错误: 无法导入相机采集模块: {e}")
+        print(f"请确保已正确安装相机驱动和camera_capture.py模块")
+        sys.exit(1)
+    except Exception as e:
+        print(f"错误: 点云采集失败: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+def get_pointcloud(config: dict) -> o3d.geometry.PointCloud:
+    """
+    根据配置获取点云数据（离线文件或实时采集）
+
+    Args:
+        config: 配置字典
+
+    Returns:
+        点云对象
+    """
+    data_source_config = config['data_source']
+    mode = data_source_config['mode']
+
+    print(f"\n数据源模式: {mode}")
+
+    if mode == 'offline':
+        # 离线模式：从文件加载
+        file_path = data_source_config['offline']['input_file']
+        return load_pointcloud_from_file(file_path)
+    elif mode == 'realtime':
+        # 实时模式：从相机采集
+        return load_pointcloud_from_camera(config)
+    else:
+        print(f"错误: 未知的数据源模式: {mode}")
+        print(f"支持的模式: 'offline' (离线文件), 'realtime' (实时采集)")
         sys.exit(1)
 
 
@@ -116,14 +202,14 @@ def main():
     config = load_config("config.yaml")
 
     # 显示关键配置
+    print(f"数据源模式: {config['data_source']['mode']}")
     print(f"可视化: {'启用' if config['visualization']['enabled'] else '禁用'}")
     print(f"保存中间结果: {'是' if config['output']['save_intermediate'] else '否'}")
 
-    # 2. 加载点云数据
-    print("\n步骤2: 加载点云数据")
+    # 2. 获取点云数据（离线或实时）
+    print("\n步骤2: 获取点云数据")
     print("-" * 60)
-    pcd_file = config['point_cloud']['input_file']
-    pcd_original = load_pointcloud(pcd_file)
+    pcd_original = get_pointcloud(config)
 
     # 收集统计信息
     stats_original = PointCloudStatistics("原始点云", pcd_original)
@@ -174,7 +260,7 @@ def main():
         print("\n步骤5: 保存中间结果")
         print("-" * 60)
 
-        output_dir = config['point_cloud']['output_dir']
+        output_dir = config['output']['dir']
 
         # 保存预处理后的点云
         processed_file = os.path.join(output_dir, "processed_pointcloud.ply")
@@ -190,7 +276,7 @@ def main():
     # 6. 生成处理报告
     print("\n步骤6: 生成处理报告")
     print("-" * 60)
-    report_file = os.path.join(config['point_cloud']['output_dir'], "processing_report.txt")
+    report_file = os.path.join(config['output']['dir'], "processing_report.txt")
     generate_report(stats_list, clusters, output_file=report_file)
 
     # 7. 可视化对比
@@ -203,7 +289,7 @@ def main():
 
         # 绘制统计图表
         print("\n绘制统计图表...")
-        chart_file = os.path.join(config['point_cloud']['output_dir'], "statistics_chart.png")
+        chart_file = os.path.join(config['output']['dir'], "statistics_chart.png")
         plot_statistics_chart(stats_list, save_path=chart_file)
 
     # 8. 地面检测
