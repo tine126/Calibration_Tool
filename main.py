@@ -8,6 +8,7 @@ import numpy as np
 import yaml
 import os
 import sys
+import copy
 from pathlib import Path
 
 # 导入预处理模块
@@ -226,7 +227,7 @@ def main():
     rotation_matrix = compute_rotation_matrix(ground_normal)
 
     # 8.4 应用旋转矩阵并计算旋转后的地面平面方程
-    rotated_pcd, ground_plane_equation, rotation_stats = apply_rotation_and_compute_plane(
+    rotated_pcd, ground_plane_equation, translation_vector, rotation_stats = apply_rotation_and_compute_plane(
         pcd_filtered,
         valid_ground_inliers,
         rotation_matrix
@@ -250,6 +251,7 @@ def main():
         "rotation_matrix": rotation_matrix.tolist(),  # 转换为列表以便JSON序列化
         "ground_normal": ground_normal.tolist(),
         "ground_plane_equation": ground_plane_equation.tolist(),  # 旋转后的地面平面方程
+        "translation_vector": translation_vector.tolist(),  # 平移向量
         "metadata": {
             "ground_detection": {
                 "ground_point_count": noise_stats['valid_count'],
@@ -261,6 +263,7 @@ def main():
                 "z_mean_mm": float(rotation_stats['z_mean']),
                 "z_median_mm": float(rotation_stats['z_median']),
                 "z_std_mm": float(rotation_stats['z_std']),
+                "translation_z_mm": float(rotation_stats['translation_vector'][2]),
                 "plane_normal_z_angle_deg": float(rotation_stats['normal_z_angle_deg']),
                 "distance_to_plane_mean_mm": float(rotation_stats['distance_to_plane_mean']),
                 "distance_to_plane_std_mm": float(rotation_stats['distance_to_plane_std'])
@@ -282,24 +285,38 @@ def main():
         f.write("自动标定结果\n")
         f.write("="*80 + "\n\n")
 
-        f.write("旋转矩阵 R (3x3):\n")
+        f.write("1. 旋转矩阵 R (3x3):\n")
         for i in range(3):
             f.write(f"  [{rotation_matrix[i, 0]:+.10f}, {rotation_matrix[i, 1]:+.10f}, {rotation_matrix[i, 2]:+.10f}]\n")
 
-        f.write(f"\n地面法向量（旋转前）:\n")
+        f.write(f"\n2. Y轴180度旋转矩阵 (已应用):\n")
+        f.write(f"  [-1.0, 0.0, 0.0]\n")
+        f.write(f"  [ 0.0, 1.0, 0.0]\n")
+        f.write(f"  [ 0.0, 0.0,-1.0]\n")
+
+        f.write(f"\n3. 平移向量 T (毫米):\n")
+        f.write(f"  [{translation_vector[0]:.3f}, {translation_vector[1]:.3f}, {translation_vector[2]:.3f}]\n")
+        f.write(f"  说明: 使原点Z坐标位于地面上\n")
+
+        f.write(f"\n4. 地面法向量（旋转前）:\n")
         f.write(f"  [{ground_normal[0]:.10f}, {ground_normal[1]:.10f}, {ground_normal[2]:.10f}]\n")
 
-        f.write(f"\n地面平面方程（旋转后，单位：毫米）:\n")
+        f.write(f"\n5. 地面平面方程（最终坐标系，单位：毫米）:\n")
         f.write(f"  {ground_plane_equation[0]:.10f} * x + {ground_plane_equation[1]:.10f} * y + {ground_plane_equation[2]:.10f} * z + {ground_plane_equation[3]:.10f} = 0\n")
-        f.write(f"  简化形式: z = {-ground_plane_equation[3]/ground_plane_equation[2]:.3f} mm ({-ground_plane_equation[3]/ground_plane_equation[2]/1000:.6f} m)\n")
+        f.write(f"  简化形式: z ≈ {-ground_plane_equation[3]/ground_plane_equation[2]:.3f} mm ({-ground_plane_equation[3]/ground_plane_equation[2]/1000:.6f} m)\n")
 
-        f.write(f"\n地面统计（旋转前）:\n")
+        f.write(f"\n6. 变换流程:\n")
+        f.write(f"  步骤1: 应用旋转矩阵 R (地面对齐到XY平面)\n")
+        f.write(f"  步骤2: 应用Y轴180度旋转\n")
+        f.write(f"  步骤3: 应用平移向量 T (原点Z移至地面)\n")
+
+        f.write(f"\n7. 地面统计（旋转前）:\n")
         f.write(f"  地面点数: {noise_stats['valid_count']:,}\n")
         f.write(f"  噪声点数: {noise_stats['noise_count']:,}\n")
         f.write(f"  地面Z均值: {ground_stats['z_mean']:.3f} mm\n")
         f.write(f"  法向量与Z轴夹角: {ground_stats['z_angle']:.2f}°\n")
 
-        f.write(f"\n地面统计（旋转后）:\n")
+        f.write(f"\n8. 地面统计（最终坐标系）:\n")
         f.write(f"  地面Z均值: {rotation_stats['z_mean']:.3f} mm\n")
         f.write(f"  地面Z中位数: {rotation_stats['z_median']:.3f} mm\n")
         f.write(f"  地面Z标准差: {rotation_stats['z_std']:.3f} mm\n")
@@ -313,6 +330,113 @@ def main():
     if config['visualization']['enabled']:
         visualize_ground_detection(pcd_filtered, valid_ground_inliers, noise_inliers,
                                    title="地面检测结果")
+
+    # 8.8 可视化旋转后过滤地面的点云场景
+    if config['visualization']['enabled']:
+        print("\n步骤8.8: 可视化旋转后过滤地面的点云场景")
+        print("-" * 60)
+
+        # 获取非地面点的索引
+        all_indices = np.arange(len(pcd_filtered.points))
+        non_ground_indices = np.setdiff1d(all_indices, valid_ground_inliers)
+
+        # 提取非地面点云
+        non_ground_pcd = pcd_filtered.select_by_index(non_ground_indices)
+
+        # 应用完整变换到非地面点云
+        # 步骤1: 地面对齐旋转
+        rotated_non_ground_pcd = copy.deepcopy(non_ground_pcd)
+        rotated_non_ground_pcd.rotate(rotation_matrix, center=(0, 0, 0))
+
+        # 步骤2: Y轴180度旋转
+        rotation_y_180 = np.array([
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, -1.0]
+        ])
+        rotated_non_ground_pcd.rotate(rotation_y_180, center=(0, 0, 0))
+
+        # 步骤3: 应用平移
+        rotated_non_ground_pcd.translate(translation_vector)
+
+        print(f"非地面点数: {len(non_ground_pcd.points):,} ({len(non_ground_pcd.points)/len(pcd_filtered.points)*100:.2f}%)")
+
+        # 准备可视化
+        geometries = []
+
+        # 非地面点云 - 使用原始颜色或灰色
+        rotated_non_ground_colored = copy.deepcopy(rotated_non_ground_pcd)
+        if rotated_non_ground_pcd.has_colors():
+            # 如果有颜色，保持原色
+            pass
+        else:
+            # 否则设为灰色
+            rotated_non_ground_colored.paint_uniform_color([0.6, 0.6, 0.6])
+        geometries.append(rotated_non_ground_colored)
+
+        # 添加坐标系
+        coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1000, origin=[0, 0, 0])
+        geometries.append(coord_frame)
+
+        # 添加XYZ轴标签（使用球体标记）
+        # X轴标签 - 红色球体
+        x_label_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=80)
+        x_label_sphere.translate([1200, 0, 0])
+        x_label_sphere.paint_uniform_color([1.0, 0.0, 0.0])
+        geometries.append(x_label_sphere)
+
+        # Y轴标签 - 绿色球体
+        y_label_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=80)
+        y_label_sphere.translate([0, 1200, 0])
+        y_label_sphere.paint_uniform_color([0.0, 1.0, 0.0])
+        geometries.append(y_label_sphere)
+
+        # Z轴标签 - 蓝色球体
+        z_label_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=80)
+        z_label_sphere.translate([0, 0, 1200])
+        z_label_sphere.paint_uniform_color([0.0, 0.0, 1.0])
+        geometries.append(z_label_sphere)
+
+        # 添加地面平面参考（半透明网格）
+        ground_z = -ground_plane_equation[3] / ground_plane_equation[2]
+
+        # 创建地面参考平面网格
+        plane_size = 5000  # 5000mm = 5m
+        plane_grid = o3d.geometry.TriangleMesh()
+
+        # 创建一个简单的矩形平面
+        vertices = np.array([
+            [-plane_size, -plane_size, ground_z],
+            [plane_size, -plane_size, ground_z],
+            [plane_size, plane_size, ground_z],
+            [-plane_size, plane_size, ground_z]
+        ])
+
+        triangles = np.array([
+            [0, 1, 2],
+            [0, 2, 3]
+        ])
+
+        plane_grid.vertices = o3d.utility.Vector3dVector(vertices)
+        plane_grid.triangles = o3d.utility.Vector3iVector(triangles)
+        plane_grid.paint_uniform_color([0.3, 0.8, 0.3])  # 绿色
+        plane_grid.compute_vertex_normals()
+
+        geometries.append(plane_grid)
+
+        print(f"\n显示可视化结果...")
+        print(f"颜色说明:")
+        print(f"  灰色 = 变换后的非地面点云（已应用旋转+Y轴180°旋转+平移）")
+        print(f"  绿色平面 = 地面参考平面 (z = {ground_z:.1f} mm)")
+        print(f"  坐标系 = 红色箭头(X轴), 绿色箭头(Y轴), 蓝色箭头(Z轴)")
+        print(f"  坐标轴标记 = 各轴末端的彩色球体")
+
+        o3d.visualization.draw_geometries(
+            geometries,
+            window_name=f"变换后场景（已过滤地面） | 地面高度={ground_z:.1f}mm",
+            width=1600,
+            height=900
+        )
 
     print("\n" + "="*60)
     print("自动标定流程完成!")

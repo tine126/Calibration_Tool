@@ -260,37 +260,53 @@ def compute_rotation_matrix(ground_normal: np.ndarray,
 
 def apply_rotation_and_compute_plane(pcd: o3d.geometry.PointCloud,
                                      ground_inliers: np.ndarray,
-                                     rotation_matrix: np.ndarray) -> Tuple[o3d.geometry.PointCloud, np.ndarray, Dict]:
+                                     rotation_matrix: np.ndarray) -> Tuple[o3d.geometry.PointCloud, np.ndarray, np.ndarray, Dict]:
     """
     应用旋转矩阵到点云，并计算旋转后地面的平面方程
+    包含Y轴180度旋转和平移使原点Z在地面上
 
     Args:
         pcd: 完整点云
         ground_inliers: 地面点索引
-        rotation_matrix: 旋转矩阵
+        rotation_matrix: 地面对齐旋转矩阵
 
     Returns:
         rotated_pcd: 旋转后的完整点云
         ground_plane_equation: 旋转后地面的平面方程 [a, b, c, d]
+        translation_vector: 平移向量 [tx, ty, tz]
         stats: 统计信息字典
     """
     print(f"\n{'='*80}")
     print("应用旋转矩阵并计算地面平面方程")
     print(f"{'='*80}")
 
-    # 1. 复制点云并应用旋转
+    # 1. 复制点云并应用地面对齐旋转
     rotated_pcd = copy.deepcopy(pcd)
     rotated_pcd.rotate(rotation_matrix, center=(0, 0, 0))
 
-    print(f"点云已旋转")
+    print(f"步骤1: 应用地面对齐旋转矩阵")
 
-    # 2. 提取旋转后的地面点
+    # 2. 沿Y轴旋转180度
+    # Y轴旋转180度矩阵:
+    # [cos(180°)  0  sin(180°)]   [-1  0   0]
+    # [0          1  0         ] = [ 0  1   0]
+    # [-sin(180°) 0  cos(180°)]   [ 0  0  -1]
+    rotation_y_180 = np.array([
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, -1.0]
+    ])
+
+    rotated_pcd.rotate(rotation_y_180, center=(0, 0, 0))
+    print(f"步骤2: 应用Y轴180度旋转")
+
+    # 3. 提取旋转后的地面点
     rotated_ground_pcd = rotated_pcd.select_by_index(ground_inliers)
     rotated_ground_points = np.asarray(rotated_ground_pcd.points)
 
     print(f"地面点数: {len(rotated_ground_points):,}")
 
-    # 3. 计算旋转后地面点的Z值统计
+    # 4. 计算旋转后地面点的Z值统计
     z_values = rotated_ground_points[:, 2]
     z_min = z_values.min()
     z_max = z_values.max()
@@ -306,7 +322,35 @@ def apply_rotation_and_compute_plane(pcd: o3d.geometry.PointCloud,
     print(f"  Z标准差: {z_std:.3f} mm")
     print(f"  Z跨度: {z_max - z_min:.3f} mm")
 
-    # 4. 计算地面平面方程
+    # 5. 计算平移向量，使原点Z坐标在地面上
+    # 使用地面Z的中位数作为地面高度
+    translation_z = -z_median
+    translation_vector = np.array([0.0, 0.0, translation_z])
+
+    print(f"\n步骤3: 计算平移向量")
+    print(f"  平移向量: ({translation_vector[0]:.3f}, {translation_vector[1]:.3f}, {translation_vector[2]:.3f}) mm")
+    print(f"  Z平移: {translation_z:.3f} mm (使原点Z在地面上)")
+
+    # 6. 应用平移
+    rotated_pcd.translate(translation_vector)
+    print(f"步骤4: 应用平移")
+
+    # 7. 重新提取地面点（平移后）
+    rotated_ground_pcd = rotated_pcd.select_by_index(ground_inliers)
+    rotated_ground_points = np.asarray(rotated_ground_pcd.points)
+
+    # 8. 计算平移后地面点的Z值统计
+    z_values_translated = rotated_ground_points[:, 2]
+    z_mean_translated = z_values_translated.mean()
+    z_median_translated = np.median(z_values_translated)
+    z_std_translated = z_values_translated.std()
+
+    print(f"\n平移后地面Z值统计:")
+    print(f"  Z均值: {z_mean_translated:.3f} mm")
+    print(f"  Z中位数: {z_median_translated:.3f} mm")
+    print(f"  Z标准差: {z_std_translated:.3f} mm")
+
+    # 9. 计算地面平面方程
     # 理想情况下，旋转后地面应该平行于XY平面，即法向量接近(0, 0, 1)
     # 平面方程: z = d (即 0*x + 0*y + 1*z - d = 0)
     # 使用Z的中位数或均值作为d值
@@ -383,10 +427,11 @@ def apply_rotation_and_compute_plane(pcd: o3d.geometry.PointCloud,
     stats = {
         'z_min': z_min,
         'z_max': z_max,
-        'z_mean': z_mean,
-        'z_median': z_median,
-        'z_std': z_std,
+        'z_mean': z_mean_translated,
+        'z_median': z_median_translated,
+        'z_std': z_std_translated,
         'z_span': z_max - z_min,
+        'translation_vector': translation_vector.tolist(),
         'plane_equation': ground_plane_equation.tolist(),
         'plane_normal': plane_eq_fitted[:3].tolist(),
         'normal_z_angle_deg': angle,
@@ -399,7 +444,7 @@ def apply_rotation_and_compute_plane(pcd: o3d.geometry.PointCloud,
 
     print(f"{'='*80}\n")
 
-    return rotated_pcd, ground_plane_equation, stats
+    return rotated_pcd, ground_plane_equation, translation_vector, stats
 
 
 def visualize_ground_detection(pcd: o3d.geometry.PointCloud,
