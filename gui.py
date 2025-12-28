@@ -202,7 +202,7 @@ class CalibrationWorker(QThread):
 
             # 保存结果
             self.update_progress(90, "保存结果...")
-            output_dir = config['point_cloud']['output_dir']
+            output_dir = config['output']['dir']
             os.makedirs(output_dir, exist_ok=True)
 
             # 构建4x4变换矩阵

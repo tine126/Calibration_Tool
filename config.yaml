@@ -12,7 +12,7 @@ data_source:
   realtime:
     # 相机参数
     camera:
-      type: "realsense"  # 相机类型: "realsense", "kinect", "orbbec"等
+      type: "orbbec"  # 相机类型: "realsense", "kinect", "orbbec"等
       serial_number: ""  # 相机序列号(为空则使用第一个可用相机)
 
       # 采集参数
