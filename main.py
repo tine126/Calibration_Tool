@@ -11,7 +11,12 @@ import sys
 from pathlib import Path
 
 # 导入预处理模块
-from preprocess import preprocess_pointcloud, visualize_clusters
+from preprocess import preprocess_pointcloud
+
+# 导入可视化和统计模块
+from visualization import (PointCloudStatistics, compare_statistics,
+                           visualize_comparison, plot_statistics_chart,
+                           generate_report)
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -105,14 +110,9 @@ def main():
     pcd_file = config['point_cloud']['input_file']
     pcd_original = load_pointcloud(pcd_file)
 
-    # 可视化原始点云
-    if config['visualization']['enabled']:
-        print("\n显示原始点云...")
-        o3d.visualization.draw_geometries([pcd_original],
-                                         window_name="原始点云",
-                                         width=1024,
-                                         height=768,
-                                         point_show_normal=False)
+    # 收集统计信息
+    stats_original = PointCloudStatistics("原始点云", pcd_original)
+    stats_original.print_summary()
 
     # 3. 点云预处理
     print("\n步骤3: 点云预处理")
@@ -121,27 +121,49 @@ def main():
     # 获取预处理参数
     preprocess_config = config['preprocessing']
 
-    # 执行预处理
-    pcd_processed, clusters, labels = preprocess_pointcloud(
-        pcd=pcd_original,
-        downsample_voxel_size=preprocess_config['downsample']['voxel_size'],
-        noise_nb_neighbors=preprocess_config['noise_filter']['nb_neighbors'],
-        noise_std_ratio=preprocess_config['noise_filter']['std_ratio'],
-        cluster_eps=preprocess_config['clustering']['eps'],
-        cluster_min_points=preprocess_config['clustering']['min_points'],
-        cluster_max_points=preprocess_config['clustering']['max_points']
-    )
+    # 3.1 降采样
+    print("\n3.1 降采样处理...")
+    from preprocess import downsample_pointcloud
+    pcd_downsampled = downsample_pointcloud(pcd_original,
+                                           voxel_size=preprocess_config['downsample']['voxel_size'])
+    stats_downsampled = PointCloudStatistics("降采样后", pcd_downsampled)
+    stats_downsampled.print_summary()
 
-    # 4. 保存中间结果
+    # 3.2 噪声滤波
+    print("\n3.2 噪声滤波...")
+    from preprocess import filter_noise
+    pcd_filtered = filter_noise(pcd_downsampled,
+                                nb_neighbors=preprocess_config['noise_filter']['nb_neighbors'],
+                                std_ratio=preprocess_config['noise_filter']['std_ratio'])
+    stats_filtered = PointCloudStatistics("滤波后", pcd_filtered)
+    stats_filtered.print_summary()
+
+    # 3.3 点云聚类
+    print("\n3.3 点云聚类...")
+    from preprocess import cluster_pointcloud
+    clusters, labels = cluster_pointcloud(pcd_filtered,
+                                         eps=preprocess_config['clustering']['eps'],
+                                         min_points=preprocess_config['clustering']['min_points'],
+                                         max_points=preprocess_config['clustering']['max_points'])
+
+    # 统计信息列表
+    stats_list = [stats_original, stats_downsampled, stats_filtered]
+
+    # 4. 数据对比分析
+    print("\n步骤4: 数据对比分析")
+    print("-" * 60)
+    compare_statistics(stats_list)
+
+    # 5. 保存中间结果
     if config['output']['save_intermediate']:
-        print("\n步骤4: 保存中间结果")
+        print("\n步骤5: 保存中间结果")
         print("-" * 60)
 
         output_dir = config['point_cloud']['output_dir']
 
         # 保存预处理后的点云
         processed_file = os.path.join(output_dir, "processed_pointcloud.ply")
-        save_pointcloud(pcd_processed, processed_file)
+        save_pointcloud(pcd_filtered, processed_file)
 
         # 保存每个聚类簇
         for i, cluster in enumerate(clusters):
@@ -150,29 +172,33 @@ def main():
 
         print(f"所有中间结果已保存到: {output_dir}")
 
-    # 5. 可视化预处理结果
+    # 6. 生成处理报告
+    print("\n步骤6: 生成处理报告")
+    print("-" * 60)
+    report_file = os.path.join(config['point_cloud']['output_dir'], "processing_report.txt")
+    generate_report(stats_list, clusters, output_file=report_file)
+
+    # 7. 可视化对比
     if config['visualization']['enabled']:
-        print("\n步骤5: 可视化预处理结果")
+        print("\n步骤7: 可视化对比")
         print("-" * 60)
 
-        # 可视化预处理后的点云
-        print("\n显示预处理后的点云...")
-        o3d.visualization.draw_geometries([pcd_processed],
-                                         window_name="预处理后的点云",
-                                         width=1024,
-                                         height=768,
-                                         point_show_normal=False)
+        # 3D可视化对比
+        visualize_comparison(pcd_original, pcd_filtered, clusters)
 
-        # 可视化聚类结果
-        if len(clusters) > 0:
-            visualize_clusters(clusters, window_name="点云聚类结果")
-        else:
-            print("警告: 没有检测到有效的点云簇")
+        # 绘制统计图表
+        print("\n绘制统计图表...")
+        chart_file = os.path.join(config['point_cloud']['output_dir'], "statistics_chart.png")
+        plot_statistics_chart(stats_list, save_path=chart_file)
 
     print("\n" + "="*60)
     print("预处理流程完成!")
     print("="*60)
-    print("\n下一步: 地面分割和篮筐检测（待实现）\n")
+    print(f"\n处理结果:")
+    print(f"  原始点云: {stats_original.point_count:,} 点")
+    print(f"  预处理后: {stats_filtered.point_count:,} 点 (保留率: {stats_filtered.point_count/stats_original.point_count*100:.2f}%)")
+    print(f"  检测到簇: {len(clusters)} 个")
+    print(f"\n下一步: 地面分割和篮筐检测（待实现）\n")
 
 
 if __name__ == "__main__":
