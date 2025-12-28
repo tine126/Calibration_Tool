@@ -44,8 +44,8 @@ hoop_detection:
 
 # 可视化参数
 visualization:
-  enabled: true
-  point_size: 2.0
+  enabled: false            # 是否启用可视化窗口（true=启用，false=禁用）
+  point_size: 2.0          # 点云显示大小
 
 # 输出参数
 output:

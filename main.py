@@ -115,6 +115,10 @@ def main():
     print("-" * 60)
     config = load_config("config.yaml")
 
+    # 显示关键配置
+    print(f"可视化: {'启用' if config['visualization']['enabled'] else '禁用'}")
+    print(f"保存中间结果: {'是' if config['output']['save_intermediate'] else '否'}")
+
     # 2. 加载点云数据
     print("\n步骤2: 加载点云数据")
     print("-" * 60)
