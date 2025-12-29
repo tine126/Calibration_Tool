@@ -570,7 +570,7 @@ if __name__ == "__main__":
     print("="*80)
 
     # 加载配置
-    config_file = "config.yaml"
+    config_file = "CTconfig.yaml"
     try:
         with open(config_file, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)

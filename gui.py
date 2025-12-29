@@ -294,7 +294,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.config_path = "config.yaml"
+        self.config_path = "CTconfig.yaml"
         self.worker = None
         self.pcd_file = None  # 离线模式的点云文件
         self.init_ui()

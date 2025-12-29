@@ -31,7 +31,7 @@ from visualization import (PointCloudStatistics, compare_statistics,
 from hoop_detection import detect_hoop, verify_hoop, visualize_hoop_detection
 
 
-def load_config(config_path: str = "config.yaml") -> dict:
+def load_config(config_path: str = "CTconfig.yaml") -> dict:
     """
     加载配置文件
 
@@ -199,7 +199,7 @@ def main():
     # 1. 加载配置文件
     print("\n步骤1: 加载配置文件")
     print("-" * 60)
-    config = load_config("config.yaml")
+    config = load_config("CTconfig.yaml")
 
     # 显示关键配置
     print(f"数据源模式: {config['data_source']['mode']}")

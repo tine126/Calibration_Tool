@@ -131,7 +131,7 @@ python main.py
 ```
 
 **实时模式：**
-1. 修改 `config.yaml`，设置 `data_source.mode: "realtime"`
+1. 修改 `CTconfig.yaml`，设置 `data_source.mode: "realtime"`
 2. 运行：
 ```bash
 python main.py
@@ -139,7 +139,7 @@ python main.py
 
 ## 配置说明
 
-配置文件位于 `config.yaml`，包含以下主要配置项：
+配置文件位于 `CTconfig.yaml`，包含以下主要配置项：
 
 ### 数据源配置
 
@@ -297,7 +297,7 @@ visualization:
 3. **质量检测失败处理**
    - 检查相机是否遮挡
    - 调整相机角度和位置
-   - 修改 `config.yaml` 中的质量检测参数：
+   - 修改 `CTconfig.yaml` 中的质量检测参数：
      ```yaml
      quality_check:
        min_points: 30000  # 降低点数要求
@@ -370,7 +370,7 @@ output/
 
 **解决方案：**
 1. 调整相机角度，确保视野足够大
-2. 降低质量检测要求（修改 `config.yaml`）：
+2. 降低质量检测要求（修改 `CTconfig.yaml`）：
    ```yaml
    hoop_detection:
      height_range: [2.5, 3.5]  # 扩大高度范围
@@ -439,7 +439,7 @@ pip install PyQt5
 ### 问题7: Open3D可视化窗口无响应
 
 **解决方案：**
-- 在 `config.yaml` 中禁用可视化：
+- 在 `CTconfig.yaml` 中禁用可视化：
   ```yaml
   visualization:
     enabled: false
@@ -460,7 +460,7 @@ from hoop_detection import detect_hoop
 import yaml
 
 # 加载配置
-with open('config.yaml', 'r', encoding='utf-8') as f:
+with open('CTconfig.yaml', 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
 # 实时采集
