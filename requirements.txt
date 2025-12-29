@@ -22,8 +22,5 @@ PyQt5>=5.15.0
 # Orbbec相机（奥比中光）：
 # pyorbbecsdk>=1.5.0
 
-# RealSense相机（Intel）：
-# pyrealsense2>=2.50.0
 
-# Azure Kinect相机（Microsoft）：
-# pyk4a>=1.5.0
+
