@@ -336,7 +336,8 @@ class CameraCapture:
 
         # 使用体素下采样进行融合（在每个体素内平均）
         # 体素大小越大，点云越薄，但细节越少
-        voxel_size = 0.015  # 15mm，可以有效平滑噪声并减少点云厚度
+        # 注意：这个体素大小应该>=预处理阶段的降采样大小(10mm)
+        voxel_size = 0.02  # 20mm，与预处理保持一致或更大
         fused_pcd = temp_pcd.voxel_down_sample(voxel_size)
 
         print(f"  原始点数: {len(merged_points):,}")

@@ -47,7 +47,7 @@ output:
 preprocessing:
   # 降采样参数 - 体素网格滤波
   downsample:
-    voxel_size: 0.01  # 体素大小（米）
+    voxel_size: 0.03  # 体素大小（米）- 增加到30mm以确保有效降采样
 
   # 噪声滤波参数 - 统计离群值移除
   noise_filter:
@@ -62,14 +62,14 @@ preprocessing:
 
 # 地面检测参数 - RANSAC平面检测（注意：点云单位为毫米）
 ground_detection:
-  distance_threshold: 200      # RANSAC距离阈值（毫米）
+  distance_threshold: 10       # RANSAC距离阈值（毫米）- 严格限制只选择真正的地面点
   ransac_n: 3                  # RANSAC最小点数（拟合平面所需）
   num_iterations: 10000        # RANSAC最大迭代次数
   random_seed: 42              # 随机数种子（保证结果可复现）
 
   # 噪声过滤参数
   noise_filter:
-    distance_threshold: 100    # 点到平面距离阈值（毫米）
+    distance_threshold: 10     # 点到平面距离阈值（毫米）- 同步减小
     nb_neighbors: 20           # 统计离群值检测的邻域点数
     std_ratio: 2.0             # 统计离群值检测的标准差倍数
 
