@@ -70,6 +70,17 @@ def detect_ground_plane(pcd: o3d.geometry.PointCloud,
     print(f"  地面Z值标准差: {ground_points[:, 2].std():.1f} mm")
     print(f"  地面法向量: ({normal[0]:.6f}, {normal[1]:.6f}, {normal[2]:.6f})")
     print(f"  与Z轴夹角: {z_angle:.2f}°")
+
+    # 验证检测到的平面是否为地面
+    # 地面的法向量应该接近垂直方向（与Z轴夹角应该很小）
+    max_angle_threshold = 30.0  # 最大允许角度（度）
+    if z_angle > max_angle_threshold:
+        print(f"\n警告: 检测到的平面与Z轴夹角过大 ({z_angle:.2f}° > {max_angle_threshold}°)")
+        print(f"  这可能是墙壁或篮板，而不是地面！")
+        print(f"  建议：调整相机角度或增加RANSAC距离阈值")
+        raise RuntimeError(f"检测到的平面不是地面（与Z轴夹角: {z_angle:.2f}°）")
+
+    print(f"  ✓ 平面方向验证通过（与Z轴夹角 {z_angle:.2f}° < {max_angle_threshold}°）")
     print(f"  平面方程: {plane_model[0]:.6f}*x + {plane_model[1]:.6f}*y + {plane_model[2]:.6f}*z + {plane_model[3]:.6f} = 0")
     print(f"{'='*80}\n")
 
