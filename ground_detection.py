@@ -73,12 +73,27 @@ def detect_ground_plane(pcd: o3d.geometry.PointCloud,
 
     # 验证检测到的平面是否为地面
     # 地面的法向量应该接近垂直方向（与Z轴夹角应该很小）
-    max_angle_threshold = 30.0  # 最大允许角度（度）
+    # 对于倾斜安装的相机，这个角度会更大
+    max_angle_threshold = 60.0  # 最大允许角度（度）- 适用于相机倾斜45°左右的情况
+
+    # 额外检查：地面点数不应该是100%（应该有非地面物体）
+    if inlier_ratio > 0.95:  # 如果超过95%的点都是地面，可能有问题
+        print(f"\n⚠️  警告: 地面点占比过高 ({inlier_ratio*100:.2f}%)")
+        print(f"  这可能意味着：")
+        print(f"  1. 点云中只有单一平面（预处理聚类可能只选择了一个簇）")
+        print(f"  2. RANSAC距离阈值过大")
+        print(f"  3. 相机视野中主要是地面，缺少其他物体")
+        print(f"  建议检查预处理步骤中的聚类结果\n")
+
     if z_angle > max_angle_threshold:
-        print(f"\n警告: 检测到的平面与Z轴夹角过大 ({z_angle:.2f}° > {max_angle_threshold}°)")
+        print(f"\n❌ 错误: 检测到的平面与Z轴夹角过大 ({z_angle:.2f}° > {max_angle_threshold}°)")
+        print(f"  平面法向量: ({normal[0]:.6f}, {normal[1]:.6f}, {normal[2]:.6f})")
         print(f"  这可能是墙壁或篮板，而不是地面！")
-        print(f"  建议：调整相机角度或增加RANSAC距离阈值")
-        raise RuntimeError(f"检测到的平面不是地面（与Z轴夹角: {z_angle:.2f}°）")
+        print(f"\n建议解决方案：")
+        print(f"  1. 如果相机倾斜角度更大，可以增加max_angle_threshold")
+        print(f"  2. 检查点云是否包含地面区域")
+        print(f"  3. 减小RANSAC距离阈值（当前: {distance_threshold}mm）")
+        raise RuntimeError(f"检测到的平面不是地面（与Z轴夹角: {z_angle:.2f}°，法向量Z分量: {normal[2]:.3f}）")
 
     print(f"  ✓ 平面方向验证通过（与Z轴夹角 {z_angle:.2f}° < {max_angle_threshold}°）")
     print(f"  平面方程: {plane_model[0]:.6f}*x + {plane_model[1]:.6f}*y + {plane_model[2]:.6f}*z + {plane_model[3]:.6f} = 0")
