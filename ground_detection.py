@@ -39,6 +39,20 @@ def detect_ground_plane(pcd: o3d.geometry.PointCloud,
     print(f"RANSAC迭代次数: {num_iterations}")
     print(f"随机数种子: {random_seed}")
 
+    # 添加诊断：检查点云的Z值分布
+    points = np.asarray(pcd.points)
+    z_values = points[:, 2]
+    print(f"\n点云Z值分布诊断:")
+    print(f"  Z最小值: {z_values.min():.1f} mm ({z_values.min()/1000:.3f} m)")
+    print(f"  Z最大值: {z_values.max():.1f} mm ({z_values.max()/1000:.3f} m)")
+    print(f"  Z均值: {z_values.mean():.1f} mm ({z_values.mean()/1000:.3f} m)")
+    print(f"  Z标准差: {z_values.std():.1f} mm")
+    print(f"  Z跨度: {z_values.max() - z_values.min():.1f} mm ({(z_values.max() - z_values.min())/1000:.3f} m)")
+
+    # 检查是否有明显的高度分层（地面vs篮筐）
+    z_histogram, z_bins = np.histogram(z_values, bins=50)
+    print(f"  Z值分布: 分为50个区间，最高峰有 {z_histogram.max():,} 个点")
+
     # 设置随机数种子以保证结果可复现
     o3d.utility.random.seed(random_seed)
 

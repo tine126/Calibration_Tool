@@ -199,32 +199,32 @@ class CameraCapture:
                 return None
 
             print(f"    [调试] 提取点坐标，原始点数: {len(points)}...")
-            # 提取点坐标（将毫米转换为米）
+            # 提取点坐标（保持毫米单位，与ground_detection.py和hoop_detection.py一致）
             points_array = np.asarray(points)
 
             # 根据点云格式提取数据
             if point_format == OBFormat.RGB_POINT and points_array.shape[1] >= 6:
                 # RGB_POINT格式: [x, y, z, r, g, b]
-                positions = points_array[:, :3] * 0.001  # mm to m
+                positions = points_array[:, :3]  # 保持mm单位
                 colors = points_array[:, 3:6] / 255.0     # 归一化到[0,1]
             else:
                 # POINT格式: [x, y, z]
-                positions = points_array.reshape(-1, 3) * 0.001  # mm to m
+                positions = points_array.reshape(-1, 3)  # 保持mm单位
                 colors = None
 
             print(f"    [调试] 过滤无效点...")
             # 过滤无效点：
-            # 1. 移除距离原点过近的点（< 0.1m）
+            # 1. 移除距离原点过近的点（< 300mm）
             # 2. 移除超出深度范围的点
             distances = np.linalg.norm(positions, axis=1)
 
-            # 获取深度范围配置（单位：米）
-            depth_min = self.config['camera']['depth_range'][0]  # 默认0.3m
-            depth_max = self.config['camera']['depth_range'][1]  # 默认10.0m
+            # 获取深度范围配置（单位：米），转换为毫米
+            depth_min = self.config['camera']['depth_range'][0] * 1000  # 0.3m -> 300mm
+            depth_max = self.config['camera']['depth_range'][1] * 1000  # 10.0m -> 10000mm
 
             valid_mask = (distances > depth_min) & (distances < depth_max)
 
-            print(f"    [调试] 深度范围: {depth_min}m - {depth_max}m")
+            print(f"    [调试] 深度范围: {depth_min}mm - {depth_max}mm ({depth_min/1000:.1f}m - {depth_max/1000:.1f}m)")
             print(f"    [调试] 过滤前: {len(positions)} 点")
             print(f"    [调试] 过滤后: {np.sum(valid_mask)} 点")
 
@@ -246,7 +246,7 @@ class CameraCapture:
             # 检查点云空间范围
             if len(positions) > 0:
                 bbox = positions.max(axis=0) - positions.min(axis=0)
-                print(f"  成功生成点云: {len(pcd.points):,} 点, 范围: X={bbox[0]:.2f}m Y={bbox[1]:.2f}m Z={bbox[2]:.2f}m")
+                print(f"  成功生成点云: {len(pcd.points):,} 点, 范围: X={bbox[0]:.1f}mm Y={bbox[1]:.1f}mm Z={bbox[2]:.1f}mm ({bbox[0]/1000:.2f}m x {bbox[1]/1000:.2f}m x {bbox[2]/1000:.2f}m)")
             else:
                 print(f"  成功生成点云: {len(pcd.points):,} 点")
 
@@ -336,12 +336,12 @@ class CameraCapture:
 
         # 使用体素下采样进行融合（在每个体素内平均）
         # 体素大小越大，点云越薄，但细节越少
-        # 注意：这个体素大小应该>=预处理阶段的降采样大小(10mm)
-        voxel_size = 0.02  # 20mm，与预处理保持一致或更大
+        # 注意：点云单位为毫米，这个体素大小应该>=预处理阶段的降采样大小(30mm)
+        voxel_size = 20  # 20mm，与预处理保持一致或稍小
         fused_pcd = temp_pcd.voxel_down_sample(voxel_size)
 
         print(f"  原始点数: {len(merged_points):,}")
-        print(f"  体素大小: {voxel_size*1000:.1f}mm")
+        print(f"  体素大小: {voxel_size:.1f}mm ({voxel_size/1000:.3f}m)")
         print(f"  融合后点数: {len(fused_pcd.points):,}")
 
         return fused_pcd
@@ -383,29 +383,28 @@ class CameraCapture:
             bbox_max = points.max(axis=0)
             bbox_size = bbox_max - bbox_min
 
-            # 检查XYZ范围（单位：米）
-            # 注意：点云坐标已经是米为单位，bbox_size也是米
-            min_x_range = 3.0  # 至少3米宽
-            min_y_range = 3.0  # 至少3米深
-            min_z_range = 2.5  # 至少2.5米高
+            # 检查XYZ范围（点云单位为毫米）
+            min_x_range = 3000  # 至少3000mm = 3m宽
+            min_y_range = 3000  # 至少3000mm = 3m深
+            min_z_range = 2500  # 至少2500mm = 2.5m高
 
             if bbox_size[0] < min_x_range:
                 is_valid = False
-                messages.append(f"✗ X方向范围不足: {bbox_size[0]:.2f}m < {min_x_range}m")
+                messages.append(f"✗ X方向范围不足: {bbox_size[0]:.0f}mm ({bbox_size[0]/1000:.2f}m) < {min_x_range}mm ({min_x_range/1000}m)")
             else:
-                messages.append(f"✓ X方向范围合格: {bbox_size[0]:.2f}m")
+                messages.append(f"✓ X方向范围合格: {bbox_size[0]:.0f}mm ({bbox_size[0]/1000:.2f}m)")
 
             if bbox_size[1] < min_y_range:
                 is_valid = False
-                messages.append(f"✗ Y方向范围不足: {bbox_size[1]:.2f}m < {min_y_range}m")
+                messages.append(f"✗ Y方向范围不足: {bbox_size[1]:.0f}mm ({bbox_size[1]/1000:.2f}m) < {min_y_range}mm ({min_y_range/1000}m)")
             else:
-                messages.append(f"✓ Y方向范围合格: {bbox_size[1]:.2f}m")
+                messages.append(f"✓ Y方向范围合格: {bbox_size[1]:.0f}mm ({bbox_size[1]/1000:.2f}m)")
 
             if bbox_size[2] < min_z_range:
                 is_valid = False
-                messages.append(f"✗ Z方向范围不足: {bbox_size[2]:.2f}m < {min_z_range}m")
+                messages.append(f"✗ Z方向范围不足: {bbox_size[2]:.0f}mm ({bbox_size[2]/1000:.2f}m) < {min_z_range}mm ({min_z_range/1000}m)")
             else:
-                messages.append(f"✓ Z方向范围合格: {bbox_size[2]:.2f}m")
+                messages.append(f"✓ Z方向范围合格: {bbox_size[2]:.0f}mm ({bbox_size[2]/1000:.2f}m)")
 
         return is_valid, messages
 

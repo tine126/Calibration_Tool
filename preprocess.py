@@ -1,6 +1,7 @@
 """
 点云预处理模块
 包含降采样、噪声滤波和点云聚类功能
+注意：点云单位为毫米(mm)，与ground_detection.py和hoop_detection.py保持一致
 """
 
 import open3d as o3d
@@ -8,13 +9,13 @@ import numpy as np
 from typing import List, Tuple
 
 
-def downsample_pointcloud(pcd: o3d.geometry.PointCloud, voxel_size: float = 0.01) -> o3d.geometry.PointCloud:
+def downsample_pointcloud(pcd: o3d.geometry.PointCloud, voxel_size: float = 10) -> o3d.geometry.PointCloud:
     """
     使用体素网格滤波器对点云进行降采样
 
     Args:
         pcd: 输入点云
-        voxel_size: 体素大小（米），默认0.01m
+        voxel_size: 体素大小（毫米），默认10mm
 
     Returns:
         降采样后的点云
@@ -60,7 +61,7 @@ def filter_noise(pcd: o3d.geometry.PointCloud,
 
 
 def cluster_pointcloud(pcd: o3d.geometry.PointCloud,
-                       eps: float = 0.1,
+                       eps: float = 100,
                        min_points: int = 10,
                        max_points: int = 100000) -> Tuple[List[o3d.geometry.PointCloud], np.ndarray]:
     """
@@ -68,7 +69,7 @@ def cluster_pointcloud(pcd: o3d.geometry.PointCloud,
 
     Args:
         pcd: 输入点云
-        eps: 聚类距离阈值（米），默认0.1m
+        eps: 聚类距离阈值（毫米），默认100mm
         min_points: 形成一个簇所需的最小点数，默认10
         max_points: 单个簇的最大点数，默认100000
 
@@ -110,10 +111,10 @@ def cluster_pointcloud(pcd: o3d.geometry.PointCloud,
 
 
 def preprocess_pointcloud(pcd: o3d.geometry.PointCloud,
-                          downsample_voxel_size: float = 0.01,
+                          downsample_voxel_size: float = 10,
                           noise_nb_neighbors: int = 50,
                           noise_std_ratio: float = 1.0,
-                          cluster_eps: float = 0.1,
+                          cluster_eps: float = 100,
                           cluster_min_points: int = 10,
                           cluster_max_points: int = 100000) -> Tuple[o3d.geometry.PointCloud,
                                                                        List[o3d.geometry.PointCloud],
@@ -123,10 +124,10 @@ def preprocess_pointcloud(pcd: o3d.geometry.PointCloud,
 
     Args:
         pcd: 输入原始点云
-        downsample_voxel_size: 降采样体素大小
+        downsample_voxel_size: 降采样体素大小（毫米）
         noise_nb_neighbors: 噪声滤波邻域点数
         noise_std_ratio: 噪声滤波距离阈值
-        cluster_eps: 聚类距离阈值
+        cluster_eps: 聚类距离阈值（毫米）
         cluster_min_points: 聚类最小点数
         cluster_max_points: 聚类最大点数
 
