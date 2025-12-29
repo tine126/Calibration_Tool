@@ -1,6 +1,6 @@
 """
 相机点云采集模块
-支持多种深度相机（RealSense, Kinect, Orbbec等）
+支持Orbbec深度相机（Gemini 2L等）
 实现多帧融合和点云质量检测功能
 """
 
@@ -12,8 +12,9 @@ import time
 
 class CameraCapture:
     """
-    深度相机点云采集类
+    Orbbec深度相机点云采集类
     支持多帧融合和质量检测
+    专为Orbbec Gemini 2L优化
     """
 
     def __init__(self, config: dict):
@@ -35,103 +36,15 @@ class CameraCapture:
         """初始化深度相机"""
         print(f"\n初始化 {self.camera_type} 相机...")
 
-        if self.camera_type == 'realsense':
-            self._initialize_realsense()
-        elif self.camera_type == 'kinect':
-            self._initialize_kinect()
-        elif self.camera_type == 'orbbec':
+        if self.camera_type == 'orbbec':
             self._initialize_orbbec()
         else:
-            raise ValueError(f"不支持的相机类型: {self.camera_type}")
+            raise ValueError(f"不支持的相机类型: {self.camera_type}，当前仅支持 'orbbec'")
 
         print(f"相机初始化成功!")
 
-    def _initialize_realsense(self):
-        """初始化Intel RealSense相机"""
-        try:
-            import pyrealsense2 as rs
-
-            # 创建pipeline
-            self.pipeline = rs.pipeline()
-            config = rs.config()
-
-            # 配置相机参数
-            camera_config = self.config['camera']
-            serial_number = camera_config.get('serial_number', '')
-
-            if serial_number:
-                config.enable_device(serial_number)
-
-            # 配置深度和颜色流
-            resolution = camera_config['resolution']
-            frame_rate = camera_config['frame_rate']
-
-            config.enable_stream(rs.stream.depth, resolution['width'], resolution['height'],
-                               rs.format.z16, frame_rate)
-            config.enable_stream(rs.stream.color, resolution['width'], resolution['height'],
-                               rs.format.rgb8, frame_rate)
-
-            # 启动pipeline
-            profile = self.pipeline.start(config)
-
-            # 获取深度传感器
-            depth_sensor = profile.get_device().first_depth_sensor()
-
-            # 设置深度范围
-            depth_range = camera_config['depth_range']
-            depth_scale = depth_sensor.get_depth_scale()
-
-            print(f"  分辨率: {resolution['width']}x{resolution['height']}")
-            print(f"  帧率: {frame_rate} fps")
-            print(f"  深度范围: {depth_range[0]}-{depth_range[1]} m")
-            print(f"  深度缩放因子: {depth_scale}")
-
-            # 等待相机稳定
-            print("  等待相机稳定...")
-            for _ in range(30):
-                self.pipeline.wait_for_frames()
-
-        except ImportError:
-            raise ImportError("未安装pyrealsense2库。请运行: pip install pyrealsense2")
-        except Exception as e:
-            raise RuntimeError(f"RealSense相机初始化失败: {e}")
-
-    def _initialize_kinect(self):
-        """初始化Azure Kinect相机"""
-        try:
-            import pyk4a
-            from pyk4a import Config, PyK4A
-
-            # 配置Kinect
-            camera_config = self.config['camera']
-            resolution = camera_config['resolution']
-
-            # 创建Kinect配置
-            k4a_config = Config(
-                color_resolution=pyk4a.ColorResolution.RES_720P,
-                depth_mode=pyk4a.DepthMode.NFOV_UNBINNED,
-                synchronized_images_only=True
-            )
-
-            # 启动相机
-            self.camera = PyK4A(k4a_config)
-            self.camera.start()
-
-            print(f"  Kinect相机已启动")
-            print(f"  深度模式: NFOV_UNBINNED")
-
-            # 等待相机稳定
-            print("  等待相机稳定...")
-            for _ in range(30):
-                self.camera.get_capture()
-
-        except ImportError:
-            raise ImportError("未安装pyk4a库。请参考Azure Kinect SDK安装文档")
-        except Exception as e:
-            raise RuntimeError(f"Kinect相机初始化失败: {e}")
-
     def _initialize_orbbec(self):
-        """初始化Orbbec相机"""
+        """初始化Orbbec相机（Gemini 2L）"""
         try:
             from pyorbbecsdk import Pipeline, Config, OBSensorType, OBFormat, PointCloudFilter, OBError
 
@@ -169,20 +82,24 @@ class CameraCapture:
                 print(f"  警告: 彩色流配置失败: {e}")
                 self.has_color_sensor = False
 
-            # 创建点云滤波器
-            self.point_cloud_filter = PointCloudFilter()
-
             # 启动pipeline
             self.pipeline.start(config)
             print(f"  Orbbec相机已启动")
 
-            # 获取相机内参（可选，点云滤波器会自动使用）
+            # 获取相机内参
             try:
                 camera_param = self.pipeline.get_camera_param()
                 self.camera_intrinsics = camera_param
                 print(f"  已获取相机内参")
+
+                # 创建点云滤波器并设置相机参数
+                self.point_cloud_filter = PointCloudFilter()
+                self.point_cloud_filter.set_camera_param(camera_param)
+                print(f"  点云滤波器已配置相机参数")
             except Exception as e:
-                print(f"  警告: 无法获取相机内参 (点云滤波器将使用默认参数): {e}")
+                print(f"  警告: 配置点云滤波器失败: {e}")
+                # 如果设置参数失败，尝试不带参数创建
+                self.point_cloud_filter = PointCloudFilter()
                 self.camera_intrinsics = None
 
             # 等待相机稳定
@@ -207,115 +124,19 @@ class CameraCapture:
 
     def capture_single_frame(self) -> Optional[o3d.geometry.PointCloud]:
         """
-        采集单帧点云
+        采集单帧点云（Orbbec Gemini 2L）
 
         Returns:
             点云对象，失败返回None
         """
-        if self.camera_type == 'realsense':
-            return self._capture_realsense_frame()
-        elif self.camera_type == 'kinect':
-            return self._capture_kinect_frame()
-        elif self.camera_type == 'orbbec':
-            return self._capture_orbbec_frame()
-        else:
-            return None
-
-    def _capture_realsense_frame(self) -> Optional[o3d.geometry.PointCloud]:
-        """采集RealSense单帧点云"""
-        try:
-            import pyrealsense2 as rs
-
-            # 等待帧
-            frames = self.pipeline.wait_for_frames()
-
-            # 对齐到颜色帧
-            align = rs.align(rs.stream.color)
-            aligned_frames = align.process(frames)
-
-            # 获取对齐后的深度和颜色帧
-            depth_frame = aligned_frames.get_depth_frame()
-            color_frame = aligned_frames.get_color_frame()
-
-            if not depth_frame or not color_frame:
-                return None
-
-            # 转换为Open3D RGBD图像
-            depth_image = o3d.geometry.Image(np.asanyarray(depth_frame.get_data()))
-            color_image = o3d.geometry.Image(np.asanyarray(color_frame.get_data()))
-
-            rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                color_image, depth_image,
-                depth_scale=1000.0,  # RealSense深度单位为毫米
-                depth_trunc=self.config['camera']['depth_range'][1] * 1000,
-                convert_rgb_to_intensity=False
-            )
-
-            # 获取相机内参
-            intrinsics = depth_frame.profile.as_video_stream_profile().intrinsics
-            pinhole_camera = o3d.camera.PinholeCameraIntrinsic(
-                intrinsics.width, intrinsics.height,
-                intrinsics.fx, intrinsics.fy,
-                intrinsics.ppx, intrinsics.ppy
-            )
-
-            # 生成点云
-            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
-                rgbd_image, pinhole_camera
-            )
-
-            return pcd
-
-        except Exception as e:
-            print(f"警告: 采集RealSense帧失败: {e}")
-            return None
-
-    def _capture_kinect_frame(self) -> Optional[o3d.geometry.PointCloud]:
-        """采集Kinect单帧点云"""
-        try:
-            # 获取捕获
-            capture = self.camera.get_capture()
-
-            if capture.depth is None or capture.color is None:
-                return None
-
-            # 转换为Open3D RGBD图像
-            depth_image = o3d.geometry.Image(capture.transformed_depth)
-            color_image = o3d.geometry.Image(capture.color)
-
-            rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                color_image, depth_image,
-                depth_scale=1000.0,
-                depth_trunc=self.config['camera']['depth_range'][1] * 1000,
-                convert_rgb_to_intensity=False
-            )
-
-            # 获取相机内参
-            calibration = self.camera.calibration
-            intrinsics = calibration.get_camera_matrix(pyk4a.calibration.CalibrationType.COLOR)
-
-            pinhole_camera = o3d.camera.PinholeCameraIntrinsic(
-                capture.color.shape[1], capture.color.shape[0],
-                intrinsics[0, 0], intrinsics[1, 1],
-                intrinsics[0, 2], intrinsics[1, 2]
-            )
-
-            # 生成点云
-            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
-                rgbd_image, pinhole_camera
-            )
-
-            return pcd
-
-        except Exception as e:
-            print(f"警告: 采集Kinect帧失败: {e}")
-            return None
+        return self._capture_orbbec_frame()
 
     def _capture_orbbec_frame(self) -> Optional[o3d.geometry.PointCloud]:
         """采集Orbbec单帧点云"""
         try:
             from pyorbbecsdk import OBFormat
 
+            print(f"    [调试] 开始等待帧...")
             # 等待帧（位置参数，单位：毫秒）
             frames = self.pipeline.wait_for_frames(1000)
 
@@ -323,23 +144,53 @@ class CameraCapture:
                 print(f"  警告: wait_for_frames返回None")
                 return None
 
+            print(f"    [调试] 帧接收成功，正在获取深度帧...")
             # 获取深度帧
             depth_frame = frames.get_depth_frame()
             if depth_frame is None:
                 print(f"  警告: 深度帧为None")
                 return None
 
+            print(f"    [调试] 深度帧获取成功，检查彩色帧...")
             # 获取彩色帧（如果可用）
             color_frame = frames.get_color_frame() if self.has_color_sensor else None
 
-            # 使用PointCloudFilter生成点云
-            # 根据是否有彩色帧选择点云格式
-            point_format = OBFormat.RGB_POINT if color_frame is not None else OBFormat.POINT
+            # 暂时强制使用POINT格式（仅深度），避免RGB_POINT可能的问题
+            print(f"    [调试] 使用POINT格式生成点云（仅深度）...")
+            point_format = OBFormat.POINT
+
+            # # 根据是否有彩色帧选择点云格式
+            # if color_frame is not None:
+            #     print(f"    [调试] 使用RGB_POINT格式生成点云...")
+            #     point_format = OBFormat.RGB_POINT
+            # else:
+            #     print(f"    [调试] 使用POINT格式生成点云（仅深度）...")
+            #     point_format = OBFormat.POINT
+
             self.point_cloud_filter.set_create_point_format(point_format)
 
-            # 处理帧生成点云
+            print(f"    [调试] 准备处理帧集合...")
+            print(f"    [调试] frames类型: {type(frames)}")
+            print(f"    [调试] depth_frame类型: {type(depth_frame)}")
+            print(f"    [调试] 点云格式: {point_format}")
+
+            # 尝试获取帧集合的更多信息
+            try:
+                print(f"    [调试] 深度帧宽度: {depth_frame.get_width()}, 高度: {depth_frame.get_height()}")
+            except Exception as e:
+                print(f"    [调试] 无法获取帧尺寸: {e}")
+
+            print(f"    [调试] 开始调用process()...")
+            import sys
+            sys.stdout.flush()  # 强制刷新输出
+
+            # 关键修复：process方法传入frames（帧集合），而不是depth_frame
             point_cloud_frame = self.point_cloud_filter.process(frames)
 
+            print(f"    [调试] process()调用完成")
+            print(f"    [调试] point_cloud_frame类型: {type(point_cloud_frame)}")
+
+            print(f"    [调试] 计算点云数据...")
             # 计算点云数据
             points = self.point_cloud_filter.calculate(point_cloud_frame)
 
@@ -347,11 +198,12 @@ class CameraCapture:
                 print(f"  警告: 生成的点云为空")
                 return None
 
+            print(f"    [调试] 提取点坐标，原始点数: {len(points)}...")
             # 提取点坐标（将毫米转换为米）
             points_array = np.asarray(points)
 
             # 根据点云格式提取数据
-            if point_format == OBFormat.RGB_POINT:
+            if point_format == OBFormat.RGB_POINT and points_array.shape[1] >= 6:
                 # RGB_POINT格式: [x, y, z, r, g, b]
                 positions = points_array[:, :3] * 0.001  # mm to m
                 colors = points_array[:, 3:6] / 255.0     # 归一化到[0,1]
@@ -360,10 +212,21 @@ class CameraCapture:
                 positions = points_array.reshape(-1, 3) * 0.001  # mm to m
                 colors = None
 
-            # 过滤无效点：移除距离原点过近的点（< 0.1m，即100mm）
-            # 这些通常是无效的深度数据
+            print(f"    [调试] 过滤无效点...")
+            # 过滤无效点：
+            # 1. 移除距离原点过近的点（< 0.1m）
+            # 2. 移除超出深度范围的点
             distances = np.linalg.norm(positions, axis=1)
-            valid_mask = distances > 0.1  # 大于10cm
+
+            # 获取深度范围配置（单位：米）
+            depth_min = self.config['camera']['depth_range'][0]  # 默认0.3m
+            depth_max = self.config['camera']['depth_range'][1]  # 默认10.0m
+
+            valid_mask = (distances > depth_min) & (distances < depth_max)
+
+            print(f"    [调试] 深度范围: {depth_min}m - {depth_max}m")
+            print(f"    [调试] 过滤前: {len(positions)} 点")
+            print(f"    [调试] 过滤后: {np.sum(valid_mask)} 点")
 
             if np.sum(valid_mask) == 0:
                 print(f"  警告: 过滤后没有有效点")
@@ -373,6 +236,7 @@ class CameraCapture:
             if colors is not None:
                 colors = colors[valid_mask]
 
+            print(f"    [调试] 创建Open3D点云对象，有效点数: {len(positions)}...")
             # 创建Open3D点云对象
             pcd = o3d.geometry.PointCloud()
             pcd.points = o3d.utility.Vector3dVector(positions)
@@ -409,28 +273,25 @@ class CameraCapture:
         point_clouds = []
         success_count = 0
 
-        # 先清空缓冲区，丢弃旧帧
-        print("  清空帧缓冲区...")
-        for _ in range(5):
-            try:
-                self.pipeline.wait_for_frames(100)
-            except:
-                pass
+        # 直接开始采集，不需要清空缓冲区
+        # （相机在初始化时已经稳定了30帧）
 
         for i in range(num_frames):
+            print(f"  正在采集第 {i+1}/{num_frames} 帧...")
             pcd = self.capture_single_frame()
 
             if pcd is not None and len(pcd.points) > 0:
                 point_clouds.append(pcd)
                 success_count += 1
-                print(f"  采集第 {success_count}/{num_frames} 帧 (点数: {len(pcd.points):,})")
+                print(f"  ✓ 采集第 {success_count}/{num_frames} 帧成功 (点数: {len(pcd.points):,})")
             else:
-                print(f"  警告: 第 {i+1} 帧采集失败，跳过")
+                print(f"  ✗ 第 {i+1} 帧采集失败，跳过")
 
             # 增加延迟，确保相机有足够时间准备下一帧
-            time.sleep(0.1)  # 100ms延迟
+            if i < num_frames - 1:  # 最后一帧不需要延迟
+                time.sleep(0.15)  # 150ms延迟
 
-        print(f"成功采集 {success_count}/{num_frames} 帧")
+        print(f"\n成功采集 {success_count}/{num_frames} 帧")
 
         return point_clouds
 
@@ -474,10 +335,12 @@ class CameraCapture:
             temp_pcd.colors = o3d.utility.Vector3dVector(merged_colors)
 
         # 使用体素下采样进行融合（在每个体素内平均）
-        voxel_size = 0.005  # 5mm
+        # 体素大小越大，点云越薄，但细节越少
+        voxel_size = 0.015  # 15mm，可以有效平滑噪声并减少点云厚度
         fused_pcd = temp_pcd.voxel_down_sample(voxel_size)
 
         print(f"  原始点数: {len(merged_points):,}")
+        print(f"  体素大小: {voxel_size*1000:.1f}mm")
         print(f"  融合后点数: {len(fused_pcd.points):,}")
 
         return fused_pcd
@@ -602,14 +465,8 @@ class CameraCapture:
         return None
 
     def stop(self):
-        """停止相机"""
-        if self.camera_type == 'realsense' and self.pipeline is not None:
-            self.pipeline.stop()
-            print("RealSense相机已停止")
-        elif self.camera_type == 'kinect' and self.camera is not None:
-            self.camera.stop()
-            print("Kinect相机已停止")
-        elif self.camera_type == 'orbbec' and self.pipeline is not None:
+        """停止Orbbec相机"""
+        if self.pipeline is not None:
             self.pipeline.stop()
             print("Orbbec相机已停止")
 
