@@ -11,7 +11,7 @@ REM Change to script directory
 cd /d "%~dp0"
 
 REM Set conda environment name
-set CONDA_ENV=pass
+set CONDA_ENV=basketball_env
 
 REM Initialize conda for batch script
 call conda activate %CONDA_ENV% 2>nul
