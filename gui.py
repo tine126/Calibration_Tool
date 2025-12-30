@@ -216,10 +216,12 @@ class CalibrationWorker(QThread):
             # 组合旋转矩阵
             combined_rotation = rotation_y_180 @ rotation_matrix
 
-            # 构建4x4齐次变换矩阵
+            # 构建4x4齐次变换矩阵（注意：平移量需要转换为米）
+            # translation_vector单位是毫米，需要转换为米以匹配config.yaml的格式
+            translation_vector_m = translation_vector / 1000.0  # 毫米 -> 米
             transform_matrix_4x4 = np.eye(4)
             transform_matrix_4x4[:3, :3] = combined_rotation
-            transform_matrix_4x4[:3, 3] = translation_vector
+            transform_matrix_4x4[:3, 3] = translation_vector_m  # 使用米为单位的平移向量
 
             # 保存配置文件
             config_output_file = os.path.join(output_dir, config['output']['config_file'])
@@ -227,8 +229,8 @@ class CalibrationWorker(QThread):
                 "rotation_matrix": rotation_matrix.tolist(),
                 "rotation_y_180": rotation_y_180.tolist(),
                 "combined_rotation": combined_rotation.tolist(),
-                "translation_vector": translation_vector.tolist(),
-                "transform_matrix_4x4": transform_matrix_4x4.tolist(),
+                "translation_vector": translation_vector.tolist(),  # 保存毫米单位（用于metadata）
+                "transform_matrix_4x4": transform_matrix_4x4.tolist(),  # 平移量已是米
                 "ground_normal": ground_normal.tolist(),
                 "ground_plane_equation": ground_plane_equation.tolist(),
                 "hoop_center": hoop_info['center_3d'].tolist(),
@@ -297,6 +299,7 @@ class MainWindow(QMainWindow):
         self.config_path = "CTconfig.yaml"
         self.worker = None
         self.pcd_file = None  # 离线模式的点云文件
+        self.calibration_result_file = None  # 标定结果文件路径
         self.init_ui()
 
     def init_ui(self):
@@ -422,6 +425,13 @@ class MainWindow(QMainWindow):
         self.result_text.setReadOnly(True)
         self.result_text.setFont(QFont("Consolas", 10))
         result_layout.addWidget(self.result_text)
+
+        # 更新目标配置文件按钮
+        self.update_config_btn = QPushButton("更新目标配置文件 (f:\\Code\\config.yaml)")
+        self.update_config_btn.setEnabled(False)  # 初始时禁用
+        self.update_config_btn.clicked.connect(self.update_target_config)
+        result_layout.addWidget(self.update_config_btn)
+
         result_group.setLayout(result_layout)
         main_layout.addWidget(result_group)
 
@@ -519,6 +529,11 @@ class MainWindow(QMainWindow):
         self.simple_btn.setEnabled(True)
         self.detail_btn.setEnabled(True)
 
+        # 保存标定结果文件路径，用于后续更新目标配置文件
+        self.calibration_result_file = result.get('config_file')
+        if self.calibration_result_file:
+            self.update_config_btn.setEnabled(True)  # 启用更新按钮
+
         # 显示结果
         self.result_text.clear()
         self.result_text.append("=" * 60)
@@ -535,7 +550,7 @@ class MainWindow(QMainWindow):
         # 4x4变换矩阵
         transform = result['transform_matrix_4x4']
         self.result_text.append("\n【4×4变换矩阵】(齐次坐标)")
-        self.result_text.append("包含: 旋转(地面对齐+Y轴180°) + 平移")
+        self.result_text.append("包含: 旋转(地面对齐+Y轴180°) + 平移(米)")
         for i in range(4):
             row_str = "  ["
             for j in range(4):
@@ -572,6 +587,92 @@ class MainWindow(QMainWindow):
         self.detail_btn.setEnabled(True)
         self.append_log(error_msg)
         QMessageBox.critical(self, "错误", f"标定失败:\n{error_msg}")
+
+    def update_target_config(self):
+        """更新目标配置文件"""
+        from update_target_config import update_config_from_calibration
+
+        # 检查标定结果文件是否存在
+        if not self.calibration_result_file or not os.path.exists(self.calibration_result_file):
+            QMessageBox.warning(self, "警告", "标定结果文件不存在，请先完成标定！")
+            return
+
+        # 从配置文件中读取目标配置文件路径和备份目录
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+
+            target_config_settings = config.get('output', {}).get('target_config', {})
+
+            # 检查是否启用
+            if not target_config_settings.get('enabled', True):
+                QMessageBox.information(self, "提示", "目标配置文件更新功能已在配置中禁用。")
+                return
+
+            # 获取目标配置文件路径
+            target_config_path = target_config_settings.get('path', r"F:\Code\config.yaml")
+
+            # 获取备份目录（相对路径转绝对路径）
+            backup_dir_rel = target_config_settings.get('backup_dir', 'backup_config')
+            backup_dir = os.path.join(os.path.dirname(self.config_path), backup_dir_rel)
+
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "警告",
+                f"读取配置文件失败，将使用默认路径:\n{str(e)}"
+            )
+            target_config_path = r"F:\Code\config.yaml"
+            backup_dir = os.path.join(os.path.dirname(self.config_path), "backup_config")
+
+        # 确认对话框
+        reply = QMessageBox.question(
+            self,
+            "确认更新",
+            f"即将更新目标配置文件:\n{target_config_path}\n\n"
+            f"原配置文件将备份到:\n{backup_dir}\n\n"
+            "是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.No:
+            return
+
+        # 显示进度
+        self.append_log("\n" + "=" * 60)
+        self.append_log("开始更新目标配置文件...")
+        self.append_log("=" * 60)
+
+        try:
+            # 执行更新
+            success = update_config_from_calibration(
+                calibration_output_file=self.calibration_result_file,
+                target_config_path=target_config_path,
+                backup_dir=backup_dir
+            )
+
+            if success:
+                QMessageBox.information(
+                    self,
+                    "成功",
+                    f"目标配置文件已成功更新！\n\n"
+                    f"目标文件: {target_config_path}\n"
+                    f"备份目录: {backup_dir}"
+                )
+                self.append_log("✓ 目标配置文件更新完成！")
+            else:
+                QMessageBox.critical(
+                    self,
+                    "失败",
+                    "更新目标配置文件失败！\n请查看日志获取详细信息。"
+                )
+                self.append_log("✗ 目标配置文件更新失败！")
+
+        except Exception as e:
+            error_msg = f"更新配置文件时发生错误: {str(e)}"
+            self.append_log(error_msg)
+            QMessageBox.critical(self, "错误", error_msg)
 
     def open_detail_mode(self):
         """打开详细模式窗口"""
@@ -1149,9 +1250,11 @@ class DetailModeWindow(QMainWindow):
             ])
             combined_rotation = rotation_y_180 @ self.rotation_matrix
 
+            # 构建4x4齐次变换矩阵（注意：平移量需要转换为米）
+            translation_vector_m = self.translation_vector / 1000.0  # 毫米 -> 米
             transform_matrix_4x4 = np.eye(4)
             transform_matrix_4x4[:3, :3] = combined_rotation
-            transform_matrix_4x4[:3, 3] = self.translation_vector
+            transform_matrix_4x4[:3, 3] = translation_vector_m  # 使用米为单位的平移向量
 
             # 显示完整结果
             self.result_text.clear()
@@ -1166,7 +1269,7 @@ class DetailModeWindow(QMainWindow):
             self.update_result(f"  Z = {hoop_center[2]:.3f} mm = {hoop_center[2]/1000:.6f} m")
 
             self.update_result("\n【4×4变换矩阵】(齐次坐标)")
-            self.update_result("包含: 旋转(地面对齐+Y轴180°) + 平移")
+            self.update_result("包含: 旋转(地面对齐+Y轴180°) + 平移(米)")
             for i in range(4):
                 row_str = "  ["
                 for j in range(4):
