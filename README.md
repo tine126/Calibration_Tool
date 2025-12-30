@@ -108,10 +108,22 @@ pip install pyk4a
 
 ## 快速开始
 
+### 一键启动（Windows）
+
+双击运行 `start_gui.bat` 即可自动激活conda环境并启动GUI界面。
+
+**注意：**
+- 默认使用conda环境名称：`pass`
+- 如需修改环境名称，编辑 `start_gui.bat` 第14行：`set CONDA_ENV=你的环境名`
+
 ### 使用GUI（推荐）
 
 1. **启动GUI程序**
 ```bash
+# 方式1：使用bat文件（Windows，推荐）
+start_gui.bat
+
+# 方式2：直接运行Python脚本
 python gui.py
 ```
 
@@ -224,7 +236,18 @@ output:
   config_file: "config.json"  # 转换矩阵配置文件
   save_intermediate: true  # 保存中间结果
   save_raw_pointcloud: true  # 保存原始点云
+
+  # 目标配置文件更新设置
+  target_config:
+    enabled: true  # 是否启用自动更新目标配置文件功能
+    path: "F:\\Code\\config.yaml"  # 目标配置文件路径
+    backup_dir: "backup_config"  # 备份目录（相对于当前工具目录）
 ```
+
+**target_config 说明：**
+- `enabled`：启用后，标定完成会自动更新目标配置文件
+- `path`：目标配置文件的完整路径（通常是主系统的config.yaml）
+- `backup_dir`：备份目录，每次更新前会自动备份原文件（使用Unix时间戳命名）
 
 ### 可视化配置
 
@@ -310,6 +333,37 @@ visualization:
    - 快速测试：减少到5帧
 
 ## 输出结果
+
+### 自动更新目标配置文件
+
+标定完成后，工具会**自动将结果写入目标配置文件**（默认为 `F:\Code\config.yaml`），无需手动复制。
+
+**自动更新的内容：**
+1. **transform_matrix**：4x4变换矩阵（平移量单位：米）
+2. **篮筐坐标**：
+   - `trajectory_analysis.hoop_x`、`hoop_y`、`hoop_height`
+   - 所有 `roi_list` 中 `exclude_cylinder` 的篮筐坐标
+
+**配置更新功能：**
+```yaml
+# CTconfig.yaml 中配置
+target_config:
+  enabled: true  # 启用自动更新
+  path: "F:\\Code\\config.yaml"  # 目标配置文件路径
+  backup_dir: "backup_config"  # 备份目录
+```
+
+**特性：**
+- ✅ 完全保留原文件格式（注释、空格、缩进）
+- ✅ 自动备份原配置文件（时间戳命名）
+- ✅ 自动单位转换（毫米→米）
+- ✅ 只更新指定字段，其他内容不变
+
+**备份文件位置：**
+```
+backup_config/
+└── config_1735534623.yaml  # Unix时间戳命名
+```
 
 ### 输出目录结构
 
@@ -544,5 +598,17 @@ for ply_file in data_dir.glob("**/*.ply"):
 
 ---
 
-**版本：** 1.0.0
-**最后更新：** 2025-12-28
+**版本：** 1.1.0
+**最后更新：** 2025-12-30
+
+**更新日志：**
+- v1.1.0 (2025-12-30)
+  - ✨ 新增自动更新目标配置文件功能
+  - ✨ 新增一键启动bat脚本（Windows）
+  - ✨ 支持conda环境自动激活
+  - 🔧 完全保留目标配置文件原有格式
+  - 🔧 自动备份原配置文件
+
+- v1.0.0 (2025-12-28)
+  - 🎉 初始版本发布
+
