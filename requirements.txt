@@ -11,7 +11,7 @@ scipy>=1.10.0
 
 # 配置文件解析
 pyyaml>=6.0
-
+ruamel.yaml>=0.17.21
 # 数据可视化和图表绘制
 matplotlib>=3.7.0
 
