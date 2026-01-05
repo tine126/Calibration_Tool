@@ -346,6 +346,13 @@ def apply_rotation_and_compute_plane(pcd: o3d.geometry.PointCloud,
     rotated_pcd.rotate(rotation_y_180, center=(0, 0, 0))
     print(f"步骤2: 应用Y轴180度旋转")
 
+    # 计算并显示组合旋转矩阵（地面对齐 + Y轴180度）
+    combined_rotation = np.dot(rotation_y_180, rotation_matrix)
+    print(f"\n组合旋转矩阵（地面对齐 + Y轴180度）:")
+    for i in range(3):
+        print(f"  [{combined_rotation[i, 0]:+.6f}, {combined_rotation[i, 1]:+.6f}, {combined_rotation[i, 2]:+.6f}]")
+    print()
+
     # 3. 提取旋转后的地面点
     rotated_ground_pcd = rotated_pcd.select_by_index(ground_inliers)
     rotated_ground_points = np.asarray(rotated_ground_pcd.points)
@@ -380,6 +387,17 @@ def apply_rotation_and_compute_plane(pcd: o3d.geometry.PointCloud,
     # 6. 应用平移
     rotated_pcd.translate(translation_vector)
     print(f"步骤4: 应用平移")
+
+    # 输出完整的4×4齐次变换矩阵
+    transformation_matrix_4x4 = np.eye(4)
+    transformation_matrix_4x4[:3, :3] = combined_rotation
+    transformation_matrix_4x4[:3, 3] = translation_vector
+
+    print(f"\n完整的4×4齐次变换矩阵:")
+    for i in range(4):
+        print(f"  [{transformation_matrix_4x4[i, 0]:+.6f}, {transformation_matrix_4x4[i, 1]:+.6f}, {transformation_matrix_4x4[i, 2]:+.6f}, {transformation_matrix_4x4[i, 3]:+.6f}]")
+    print(f"  说明: 包含旋转（左上3×3）+ 平移（右上3×1）")
+    print()
 
     # 7. 重新提取地面点（平移后）
     rotated_ground_pcd = rotated_pcd.select_by_index(ground_inliers)
