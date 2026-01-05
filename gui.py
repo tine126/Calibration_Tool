@@ -218,17 +218,50 @@ class CalibrationWorker(QThread):
 
             # 构建4x4齐次变换矩阵（注意：平移量需要转换为米）
             # translation_vector单位是毫米，需要转换为米以匹配config.yaml的格式
+            print(f"\n[DEBUG] translation_vector (原始): {translation_vector}")
+            print(f"[DEBUG] translation_vector[2] (Z平移mm): {translation_vector[2]:.3f} mm")
             translation_vector_m = translation_vector / 1000.0  # 毫米 -> 米
+            print(f"[DEBUG] translation_vector_m (转换后): {translation_vector_m}")
+            print(f"[DEBUG] translation_vector_m[2] (Z平移m): {translation_vector_m[2]:.6f} m")
+
+
+            # 符号修正：应用Y轴180度旋转 + 翻转第3列
+            # R_corrected = R_y180 @ R_combined @ diag(1,1,-1)
+            correction_matrix_left = np.array([
+                [-1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, -1.0]
+            ])
+            correction_matrix_right = np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, -1.0]
+            ])
+            combined_rotation_corrected = correction_matrix_left @ combined_rotation @ correction_matrix_right
+
+            print(f"\n{'='*80}")
+            print("符号修正（Y轴180度 + 翻转第3列）")
+            print(f"{'='*80}")
+            print("修正后的旋转矩阵（3×3）:")
+            for i in range(3):
+                print(f"  [{combined_rotation_corrected[i, 0]:+.6f}, {combined_rotation_corrected[i, 1]:+.6f}, {combined_rotation_corrected[i, 2]:+.6f}]")
+
             transform_matrix_4x4 = np.eye(4)
-            transform_matrix_4x4[:3, :3] = combined_rotation
+            transform_matrix_4x4[:3, :3] = combined_rotation_corrected
             transform_matrix_4x4[:3, 3] = translation_vector_m  # 使用米为单位的平移向量
+
+            print(f"\n修正后的4×4齐次变换矩阵（平移单位：米）:")
+            for i in range(4):
+                print(f"  [{transform_matrix_4x4[i, 0]:+.6f}, {transform_matrix_4x4[i, 1]:+.6f}, {transform_matrix_4x4[i, 2]:+.6f}, {transform_matrix_4x4[i, 3]:+.6f}]")
+            print(f"  说明: 此矩阵已应用符号修正，与CloudCompare标定结果一致")
+            print(f"{'='*80}\n")
 
             # 保存配置文件
             config_output_file = os.path.join(output_dir, config['output']['config_file'])
             output_config = {
                 "rotation_matrix": rotation_matrix.tolist(),
                 "rotation_y_180": rotation_y_180.tolist(),
-                "combined_rotation": combined_rotation.tolist(),
+                "combined_rotation": combined_rotation_corrected.tolist(),  # 保存修正后的旋转矩阵
                 "translation_vector": translation_vector.tolist(),  # 保存毫米单位（用于metadata）
                 "transform_matrix_4x4": transform_matrix_4x4.tolist(),  # 平移量已是米
                 "ground_normal": ground_normal.tolist(),

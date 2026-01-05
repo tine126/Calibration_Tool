@@ -120,26 +120,16 @@ def update_target_config(
         # 3. 提取标定结果中的关键参数
         transform_matrix = calibration_result.get('transform_matrix_4x4')
         ground_normal = calibration_result.get('ground_normal')
-        hoop_center = calibration_result.get('hoop_center_3d')  # 单位：毫米
+        hoop_center = calibration_result.get('hoop_center')  # 单位：毫米
 
         # 检查必需参数
         if transform_matrix is None:
             print("错误: 标定结果中缺少 transform_matrix_4x4")
             return False
 
-        # 转换transform_matrix的单位：将平移量从毫米转换为米
-        # transform_matrix是4x4矩阵，第4列是平移量(tx, ty, tz)
-        transform_matrix_m = []
-        for i, row in enumerate(transform_matrix):
-            new_row = []
-            for j, val in enumerate(row):
-                if j == 3 and i < 3:  # 第4列的前3行是平移量(tx, ty, tz)
-                    new_row.append(val / 1000.0)  # 毫米转米
-                else:
-                    new_row.append(val)
-            transform_matrix_m.append(new_row)
-
-        print(f"[OK] 平移量已从毫米转换为米: tx={transform_matrix_m[0][3]:.4f}m, ty={transform_matrix_m[1][3]:.4f}m, tz={transform_matrix_m[2][3]:.4f}m")
+        # 注意：transform_matrix_4x4中的平移量已经是米为单位，不需要再转换
+        # （在gui.py中保存时已经转换为米）
+        print(f"[OK] 平移量已从标定结果中读取(米): tx={transform_matrix[0][3]:.4f}m, ty={transform_matrix[1][3]:.4f}m, tz={transform_matrix[2][3]:.4f}m")
 
         # 4. 使用正则表达式替换transform_matrix
         # 匹配多行块样式或内联样式的transform_matrix
@@ -150,7 +140,7 @@ def update_target_config(
 
             # 构建新的transform_matrix（内联格式）
             rows = []
-            for row in transform_matrix_m:
+            for row in transform_matrix:
                 row_str = '[' + ', '.join(str(v) for v in row) + ']'
                 rows.append(row_str)
 
@@ -237,7 +227,7 @@ def update_target_config(
             content = re.sub(pattern_cylinder, replace_exclude_cylinder, content, flags=re.DOTALL)
             print("[OK] 已更新: ROI区域的exclude_cylinder坐标")
         else:
-            print("[WARNING] 警告: 标定结果中没有篮筐坐标 (hoop_center_3d)，跳过篮筐坐标更新")
+            print("[WARNING] 警告: 标定结果中没有篮筐坐标 (hoop_center)，跳过篮筐坐标更新")
 
         # 6. 保存更新后的配置文件
         with open(target_config_path, 'w', encoding='utf-8') as f:
